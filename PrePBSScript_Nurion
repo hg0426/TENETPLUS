@@ -1,0 +1,13 @@
+#!/bin/sh
+#PBS -V
+#PBS -N tenet
+#PBS -q normal
+#PBS -A etc
+#PBS -l select=1:ncpus=1:mpiprocs=1:ompthreads=1
+#PBS -l walltime=48:00:00
+
+
+source activate TENET
+
+cd $PBS_O_WORKDIR
+
