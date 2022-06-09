@@ -1,0 +1,28 @@
+#!/bin/bash
+
+###USAGE: bash splitMatrix_rowTF [TE_result_matrix.txt]
+
+#cd /home/Data/tenet_result_kyu/
+#TE_mtrx=/home/Data/tenet_result_kyu/Bcell_merge_normal/TE_result_matrix.txt
+#TE_mtrx=/home/Data/tenet_result_kyu/Bcell_merge_normal/TE_result_matrix_peaksInCol.txt
+
+TE_mtrx="$1"
+
+cut -d$'\t' -f 1 $TE_mtrx |grep "^[A-Za-z].*\-.*\-.*[0-9]$" > PeakRows.tmp
+wc -l PeakRows.tmp
+
+cut -d$'\t' -f 1 $TE_mtrx > rowNames.tmp
+wc -l rowNames.tmp
+
+for i in `cat  PeakRows.tmp`; do grep -n -w ^$i$ rowNames.tmp; done | cut -d":" -f 1 > LN.tmp
+
+allPeaks=`perl -pe 's/\n/$1,/' LN.tmp |sed 's/.$//'`
+HeadAllPeaks=`echo "1,"$allPeaks`
+
+#https://stackoverflow.com/questions/40842008/subset-a-file-by-row-and-column-numbers
+awk -v rows="$HeadAllPeaks" 'BEGIN{split(rows, a, ","); for (i in a) b[a[i]]} NR in b' $TE_mtrx > ${TE_mtrx%.txt}_rowPK.txt
+
+wc -l ${TE_mtrx%.txt}_rowPK.txt
+cut -f 1 ${TE_mtrx%.txt}_rowPK.txt | wc -l
+rm *tmp
+
