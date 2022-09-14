@@ -21,3 +21,4 @@ https://github.com/neocaleb/TENET
 
 	./TENET expression_data.csv 10 trajectory.txt cell_select.txt 1
 
+## 2022.09.14 onstep doesn't work now
