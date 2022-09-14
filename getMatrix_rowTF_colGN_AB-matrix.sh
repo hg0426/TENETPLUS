@@ -2,7 +2,7 @@
 
 #cd /home/Data/tenet_result_kyu/
 
-for TE_mtrx in `ls pwd/TE_result_matrix.txt`; do
+for TE_mtrx in `ls $1`; do
 	echo "-------------------"
 	echo $TE_mtrx
 
