@@ -39,7 +39,7 @@ https://github.com/neocaleb/TENET
 	
 #### example
 
- sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result.matrix.txt
+ sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result.matrix.txt  
  sh getMatrix_rowTF_colPK_C-matrix.sh TE_result.matrix.txt
 	
 ## 3 Reconstructing GRN
