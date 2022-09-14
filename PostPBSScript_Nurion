@@ -1,2 +1,0 @@
-
-qstat -f $PBS_JOBID
