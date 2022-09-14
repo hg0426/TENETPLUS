@@ -2,7 +2,7 @@
 
 #cd /home/Data/tenet_result_kyu/
 
-for TE_mtrx in `ls /home/Data_Drive_8TB/Data/tenet_result_kyu/cell*_normal/TE_result_matrix.txt`; do
+for TE_mtrx in `ls pwd/TE_result_matrix.txt`; do
 	echo "-------------------"
 	echo $TE_mtrx
 
