@@ -28,7 +28,7 @@ https://github.com/neocaleb/TENET
 	
 #### example
 
-        ./TENET_TF expression_data.csv 10 trajectory.txt cell_select.txt 1 mouse
+        ./TENET_TF expression_data.csv 10 trajectory.txt cell_select.txt 1 human
 	
 ## 2 split result matrix (detect peak standard : xxx - xxxx - xxxx)
 
