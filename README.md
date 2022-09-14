@@ -1,8 +1,23 @@
 # TENETPLUS
 
-TENET+ is a tool predicting epigenetic gene regulatory programs in unbiased way, suggesting that novel epigenetic regulations can be identified by TENET+.![image](https://user-images.githubusercontent.com/61915842/190167084-d7afa8d6-df60-4e22-82fd-177c5d1ce772.png)
-
+A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo-time ordered single cell transcriptomic data 
 
 <div>
 <img src="https://user-images.githubusercontent.com/61915842/190166344-069614e4-4d40-4591-b212-178cd6becb02.png" width="90%"></img>
 </div>
+
+## Citation
+
+Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014
+https://github.com/neocaleb/TENET
+
+
+## Run TENET + in onestep
+#### Usage
+
+	python TENETPLUS_onestep.py []
+
+#### example
+
+	./TENET expression_data.csv 10 trajectory.txt cell_select.txt 1
+
