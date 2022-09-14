@@ -5,7 +5,7 @@ cmd = tenet
 print(cmd) 
 os.system(cmd)
 
-result_dic = os.getcwd() + "/TE_result_matrixl.txt"
+result_dic = os.getcwd() + "/TE_result_matrix.txt"
 
 cmd = "sh getMatrix_rowTF_colPK_C-matrix.sh " + result_dic
 print(cmd)
