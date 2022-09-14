@@ -6,11 +6,12 @@ print(cmd)
 os.system(cmd)
 
 result_dic = os.getcwd() + "/TE_result_matrixl.txt"
-cmd = "sh getMatrix_rowTF_colPK_C-matrix.sh result_dic"
+
+cmd = "sh getMatrix_rowTF_colPK_C-matrix.sh " + result_dic
 print(cmd)
 os.system(cmd)
 
-cmd = "sh getMatrix_rowTF_colGN_AB-matrix.sh result_dic"
+cmd = "sh getMatrix_rowTF_colGN_AB-matrix.sh " result_dic
 print(cmd)
 os.system(cmd)
 
