@@ -35,12 +35,12 @@ https://github.com/neocaleb/TENET
 #### Usage
 
         sh getMatrix_rowTF_colGN_AB-matrix.sh [TENET result matrix]
-	sh getMatrix_rowTF_colPK_C-matrix.sh [TENET result matrix]
+        sh getMatrix_rowTF_colPK_C-matrix.sh [TENET result matrix]
 	
 #### example
 
         sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result.matrix.txt
-	sh getMatrix_rowTF_colPK_C-matrix.sh TE_result.matrix.txt
+        sh getMatrix_rowTF_colPK_C-matrix.sh TE_result.matrix.txt
 	
 ## 3 Reconstructing GRN
 
@@ -51,18 +51,18 @@ https://github.com/neocaleb/TENET
 #### example
 
         python make_GRN_new.py TE_result_matrix_rowTF_colGN.txt
-	python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt
+        python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt
 	
 ## 4 Counting out-degree of a given GRN
 
 #### Usage
-	python countOutdegree.py [name of GRN]
+        python countOutdegree.py [name of GRN]
 #### Example
-	python countOutdegree.py TE_result_matrix_rowTF_colGN.sif
-	python countOutdegree.py TE_result_matrix_rowTF_colPK.sif
+        python countOutdegree.py TE_result_matrix_rowTF_colGN.sif
+        python countOutdegree.py TE_result_matrix_rowTF_colPK.sif
 
 ###### Output file
-	TE_result_matrix_rowTF_colPK.sif.outdegree.txt
+        TE_result_matrix_rowTF_colPK.sif.outdegree.txt
 
 	
 	
