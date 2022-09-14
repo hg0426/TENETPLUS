@@ -4,5 +4,5 @@ Developed version of TENET using ATAC seq
 A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo-time ordered single cell transcriptomic data 
 
 <div>
-<img src="https://user-images.githubusercontent.com/33104430/83049138-fe23bb00-a04a-11ea-9d8a-59ca7582e759.png" width="90%"></img>
+<img src="https://user-images.githubusercontent.com/61915842/190166344-069614e4-4d40-4591-b212-178cd6becb02.png" width="90%"></img>
 </div>
