@@ -8,9 +8,6 @@
 
 TE_mtrx="$1"
 
-if [ ! -f "HumanTFs.txt" ]
-then ln -s /home/hg0426/TENET-master/GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
-fi
 #ln -s /home/Data/tenet_result_kyu/GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
 
 cut -f 1 $TE_mtrx | sort > TE_Matrix.sort.tmp
