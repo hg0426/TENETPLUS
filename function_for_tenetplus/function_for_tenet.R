@@ -1,4 +1,4 @@
-print("functions_for_TENET_2022.10.17")
+print("functions_for_TENET_attached_ver.2022.10.17")
 
 TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.frame("non","non"),
                        PAG_list=as.data.frame("non","non"),top_gene_num=20,highlight_gene="",ven = F,fill_col = "grey19",
