@@ -165,8 +165,14 @@ pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list=F,total_p
         }
         
       }
-      target_list <- subset(gene_list,gene_list[,1] == selected_gene[j])[,3]
-      temp_matrix <- matrix[,target_list]
+      target_list <- subset(gene_list,gene_list[,1] == gsub("[.]","-",selected_gene[j]))[,3]
+      
+      target_list <- gsub("-",".",target_list)
+      temp_matrix <- as.data.frame(matrix[,target_list])
+      if (length(target_list)==1) {
+        colnames(temp_matrix) <- target_list
+        
+      }
       temp_matrix <- cbind(pseudotime,temp_matrix)
       temp_matrix <- subset(temp_matrix,temp_matrix[,1]!="Inf" & temp_matrix[,1]!="NA")
       
@@ -178,7 +184,11 @@ pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list=F,total_p
       
       temp_matrix_sorted <- as.matrix(temp_matrix_sorted)
       
-      temp_average <- apply(temp_matrix_sorted[,-1],1,mean)
+      if (length(target_list)!=1) {
+        temp_average <- apply(temp_matrix_sorted[,-1],1,mean)
+      }else{
+        temp_average <- temp_matrix_sorted[,2]
+      }
       temp_average <- as.data.frame(temp_average)
       colnames(temp_average) <- paste0(selected_gene[j]," (",dim(temp_matrix_sorted)[2]-1,")")
       average_matrix <- cbind(average_matrix,temp_average)
