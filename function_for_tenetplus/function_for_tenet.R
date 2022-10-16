@@ -9,7 +9,7 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     att <- as.data.frame(table(gene_list[,1]))[order(as.data.frame(table(gene_list[,1]),)[,2], decreasing = T),]
     top_genes <- att[1:top_gene_num,]
     top_RNA <- top_genes
-    cols <- rep(fill_col,times=20)
+    cols <- rep(fill_col,times=top_gene_num)
     if(length(highlight_gene)>0){
       for (z in 1:length(top_genes[,1])){
         if (top_genes[z,1] %in% highlight_gene){
@@ -25,8 +25,11 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     
     
     p + coord_flip()
-    ggsave(paste0(name_RNA,".png"))
-    
+    if (save_files == T) {
+      ggsave(paste0(name_RNA,".png"))
+    }
+  
+    return(p + coord_flip())  
   }
   
   #===================ATAC_Peak==================================
@@ -34,7 +37,7 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     att <- as.data.frame(table(peak_list[,1]))[order(as.data.frame(table(peak_list[,1]),)[,2], decreasing = T),]
     top_genes <- att[1:top_gene_num,]
     top_ATAC <- top_genes
-    cols <- rep(fill_col,times=20)
+    cols <- rep(fill_col,times=top_gene_num)
     if(length(highlight_gene)>0){
       for (z in 1:length(top_genes[,1])){
         if (top_genes[z,1] %in% highlight_gene){
@@ -50,14 +53,17 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     
     
     p + coord_flip()
-    ggsave(paste0(name_ATAC,".png"))
+    if (save_files == T) {
+      ggsave(paste0(name_ATAC,".png"))
+    }
+    return(p + coord_flip())
   }
   #=================trimmed_by_PAG======================
   if (PAG_list[1,1] != "non") {
     att <- as.data.frame(table(PAG_list[,1]))[order(as.data.frame(table(PAG_list[,1]),)[,2], decreasing = T),]
     top_genes <- att[1:top_gene_num,]
     top_Trim <- top_genes
-    cols <- rep(fill_col,times=20)
+    cols <- rep(fill_col,times=top_gene_num)
     if(length(highlight_gene)>0){
       for (z in 1:length(top_genes[,1])){
         if (top_genes[z,1] %in% highlight_gene){
@@ -73,8 +79,11 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     
     
     p + coord_flip()
-    ggsave(paste0(name_trim,".png"))
+    if (save_files == T) {
+      ggsave(paste0(name_trim,".png"))
+    }
     
+    return(p + coord_flip())
   }
   
   if (ven == T) {
@@ -110,7 +119,7 @@ trimming_PAG <- function(total_peak_gene,peak_list,gene_list,name = "trimmed_by_
   return(output)
 }
 
-pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list,total_peak_gene,pseudotime, span=0.5,use_pseudotime_origin = T, use_z_score = T,
+pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list=F,total_peak_gene,pseudotime, span=0.5,use_pseudotime_origin = T, use_z_score = T,
                               order_pseudo_score=F,p_min=-0.7,p_max=0.7,p_legend=T,filename = "pseudotime_heatmap",
                               max_min = T,out_result =F,target_average = F, target,pseudo_decrease=T){
   #====================subset & order by pseudotime =================
@@ -139,19 +148,22 @@ pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list,total_pea
   if (target_average == T){
     average_matrix <- sub_matrix_sorted[,1]
     for (j in 1:length(selected_gene)){
-      peak_target <- subset(peak_list,peak_list[,1] == selected_gene[j])
-      colnames(peak_target) <- c("source","score","chr")
-      gene_target <- subset(gene_list,gene_list[,1] == selected_gene[j])
-      colnames(gene_target) <- c("source","score","Gene.Name")
-      PAG_target <- merge(peak_target,total_peak_gene, by = "chr")
-      intersection <- merge(gene_target,PAG_target, by = "Gene.Name")
-      if(target == "peak"){
-        target_list <- gsub("-",".",unique(intersection$chr))
+      if (peak_list != F) {
+        peak_target <- subset(peak_list,peak_list[,1] == selected_gene[j])
+        colnames(peak_target) <- c("source","score","chr")
+        gene_target <- subset(gene_list,gene_list[,1] == selected_gene[j])
+        colnames(gene_target) <- c("source","score","Gene.Name")
+        PAG_target <- merge(peak_target,total_peak_gene, by = "chr")
+        intersection <- merge(gene_target,PAG_target, by = "Gene.Name")
+        if(target == "peak"){
+          target_list <- gsub("-",".",unique(intersection$chr))
+        }
+        if(target == "gene"){
+          target_list <- gsub("-",".",unique(intersection$Gene.Name))
+        }
+        
       }
-      if(target == "gene"){
-        target_list <- gsub("-",".",unique(intersection$Gene.Name))
-      }
-      
+      target_list <- subset(gene_list,gene_list[,1] == selected_gene[j])[,3]
       temp_matrix <- matrix[,target_list]
       temp_matrix <- cbind(pseudotime,temp_matrix)
       temp_matrix <- subset(temp_matrix,temp_matrix[,1]!="Inf" & temp_matrix[,1]!="NA")
