@@ -33,11 +33,11 @@ https://github.com/neocaleb/TENET
 ## 1-2. Run TENET from selected gene peak to target using expression data in a csv file and pseudotime result in a text file
 #### Usage
 
- 	./TENET_TF [expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [selcet_list]
+ 	./TENET_select [expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [selcet_list]
 	
 #### example
 
-	 ./TENET_TF expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
+	 ./TENET_select expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
 	
 ## 2 split result matrix (detect peak standard : xxx - xxxx - xxxx)
 
