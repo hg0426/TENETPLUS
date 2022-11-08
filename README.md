@@ -5,7 +5,7 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 ## multiome version (non-multiome version is under construction)
 
 <div>
-<img src="(https://user-images.githubusercontent.com/61915842/200549687-d4559d3b-315e-402d-b58e-78ea1731e4f9.PNG" width="90%"></img>
+![TENET_PLUSE_workflow](https://user-images.githubusercontent.com/61915842/200549687-d4559d3b-315e-402d-b58e-78ea1731e4f9.PNG)
 </div>
 
 ## Citation
