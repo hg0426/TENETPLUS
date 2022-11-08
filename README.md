@@ -15,35 +15,36 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 ## Citation
 
 Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014
+
 https://github.com/neocaleb/TENET
 
 
 ## 1. Run TENET using expression data in a csv file and pseudotime result in a text file
 #### Usage
 
-	./TENET [expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length]
+	./TENET [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length]
 	
 #### example
 
-	./TENET expression_data.csv 10 trajectory.txt cell_select.txt 1
+	./TENET merged_expression_data.csv 10 trajectory.txt cell_select.txt 1
 
 ## 1-1. Run TENET from TF to target using expression data in a csv file and pseudotime result in a text file
 #### Usage
 
- 	./TENET_TF [expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [species]
+ 	./TENET_TF [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [species]
 	
 #### example
 
-	 ./TENET_TF expression_data.csv 10 trajectory.txt cell_select.txt 1 human
+	 ./TENET_TF merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 human
 	 
 ## 1-2. Run TENET from selected gene peak to target using expression data in a csv file and pseudotime result in a text file
 #### Usage
 
- 	./TENET_select [expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [selcet_list]
+ 	./TENET_select [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [selcet_list]
 	
 #### example
 
-	 ./TENET_select expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
+	 ./TENET_select merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
 	
 ## 2 split result matrix (detect peak standard : xxx - xxxx - xxxx)
 
