@@ -6,7 +6,8 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 
 <div>
 	
-![TENET_PLUSE_workflow](https://user-images.githubusercontent.com/61915842/200549687-d4559d3b-315e-402d-b58e-78ea1731e4f9.PNG)
+![TENET_PLUSE_workflow](https://user-images.githubusercontent.com/61915842/200551135-54f726db-6863-4d52-8322-98246300a13d.PNG)
+
 
 </div>
 
