@@ -164,9 +164,9 @@ pseudotime_heatmap<- function(matrix,selected_gene,gene_list,peak_list=F,total_p
           target_list <- gsub("-",".",unique(intersection$Gene.Name))
         }
         
-      }
+      }else{
       target_list <- subset(gene_list,gene_list[,1] == gsub("[.]","-",selected_gene[j]))[,3]
-      
+      }
       target_list <- gsub("-",".",target_list)
       temp_matrix <- as.data.frame(matrix[,target_list])
       if (length(target_list)==1) {
