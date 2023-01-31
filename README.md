@@ -5,7 +5,7 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 ## multiome version (non-multiome version is under construction)
 ## TENET Time Predict in SingleCore
 
--0.0006555*Gene^2(TF*Gene)+0.000006553*Gene^2(TF*Gene)*selected cell count
+-0.0006555 x Gene^2(or TF x Gene)+0.000006553 x Gene^2 (or TF x Gene) x selected cell count
 
 <div>
 	
