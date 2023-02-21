@@ -7,8 +7,18 @@
 #TE_mtrx=/home/Data/tenet_result_kyu/Bcell_merge_normal/TE_result_matrix_peaksInCol.txt
 
 TE_mtrx="$1"
+species="$2"
 
-#ln -s /home/Data/tenet_result_kyu/GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
+rm HumanTFs.txt
+if [ "$species" == "human" ]
+then 
+	ln -s /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
+  echo "human_!1"
+elif [ "$species" == "mouse" ]
+then
+	ln -s /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/GO_symbol_mouse_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
+  echo "mouse_!1"
+fi
 
 cut -f 1 $TE_mtrx | sort > TE_Matrix.sort.tmp
 sort HumanTFs.txt > HumanTFs.sort.tmp

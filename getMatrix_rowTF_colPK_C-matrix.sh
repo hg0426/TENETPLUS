@@ -6,8 +6,10 @@
 for TE_mtrx in `ls $1`; do
 	echo "-------------------"
 	echo $TE_mtrx
+	species="$2"
+	echo $species
 
-        bash splitMatrix_rowTF ${TE_mtrx}
+        bash splitMatrix_rowTF ${TE_mtrx} ${species}
         #===> ${TE_mtrx%.txt}_rowTF.txt
 
 	bash splitMatrix_colPK ${TE_mtrx%.txt}_rowTF.txt
