@@ -9,7 +9,7 @@ TE_mtrx="$1"
 
 head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep "^[A-Za-z].*\-.*\-.*[0-9]$" |wc -l
 
-PeakCols=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep "^[A-Za-z].*\-.*\-.*[0-9]$"|awk '{ printf "%s,", $0 }'|sed 's/.$//'`
+PeakCols=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep "^[A-Za-z].*[:-]-.*\[:-].*[0-9]$"|awk '{ printf "%s,", $0 }'|sed 's/.$//'`
 TE='TE'
 TePeakCols="$TE,$PeakCols" 	
 echo $TePeakCols > TePeakCols.txt
