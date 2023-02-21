@@ -51,7 +51,7 @@ https://github.com/neocaleb/TENET
 
 	 ./TENET_select merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
 	
-## 2 split result matrix (detect peak standard : xxx [-:] xxxx [-:] xxxx)
+## 2 split result matrix (detect peak standard : xxx [- or :] xxxx [- or :] xxxx)
 
 #### Usage
 
