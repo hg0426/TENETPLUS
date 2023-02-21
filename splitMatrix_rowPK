@@ -8,7 +8,7 @@
 
 TE_mtrx="$1"
 
-cut -d$'\t' -f 1 $TE_mtrx |grep "^[A-Za-z].*\-.*\-.*[0-9]$" > PeakRows.tmp
+cut -d$'\t' -f 1 $TE_mtrx |grep "^[A-Za-z].*\[:-].*\[:-].*[0-9]$" > PeakRows.tmp
 wc -l PeakRows.tmp
 
 cut -d$'\t' -f 1 $TE_mtrx > rowNames.tmp
