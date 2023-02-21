@@ -55,24 +55,24 @@ https://github.com/neocaleb/TENET
 
 #### Usage
 
- 	sh getMatrix_rowTF_colGN_AB-matrix.sh [TENET result matrix]  
- 	sh getMatrix_rowTF_colPK_C-matrix.sh [TENET result matrix]
+ 	sh getMatrix_rowTF_colGN_AB-matrix.sh [TENET result matrix] [species]
+ 	sh getMatrix_rowTF_colPK_C-matrix.sh [TENET result matrix] [species]
 	
 #### example
 
-	 sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result_matrix.txt  
-	 sh getMatrix_rowTF_colPK_C-matrix.sh TE_result_matrix.txt
+	 sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result_matrix.txt mouse
+	 sh getMatrix_rowTF_colPK_C-matrix.sh TE_result_matrix.txt mouse
 	
 ## 3 Reconstructing GRN
 
 #### Usage
 
- 	python make_GRN_new.py [AB matrix]
+ 	python make_GRN_new.py [AB matrix] [cut-off]
 	
 #### example
 
- 	python make_GRN_new.py TE_result_matrix_rowTF_colGN.txt  
- 	python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt
+ 	python make_GRN_new.py TE_result_matrix_rowTF_colGN.txt 0.01 
+ 	python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt 0.01
 	
 ## 4 Counting out-degree of a given GRN
 
