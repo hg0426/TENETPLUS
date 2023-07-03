@@ -12,11 +12,11 @@ species="$2"
 rm HumanTFs.txt
 if [ "$species" == "human" ]
 then 
-	ln -s /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
+	ln -s ./GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
   echo "human_!1"
 elif [ "$species" == "mouse" ]
 then
-	ln -s /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/GO_symbol_mouse_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
+	ln -s ./GO_symbol_mouse_regulation_of_transcription+sequence-specific_DNA_binding_list.txt HumanTFs.txt
   echo "mouse_!1"
 fi
 
