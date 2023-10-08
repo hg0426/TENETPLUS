@@ -7,9 +7,9 @@
 
 TE_mtrx="$1"
 
-head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^[A-Za-z].*\-.\d*\-.\d*$" |wc -l
+head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$" |wc -l
 
-PeakCols=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^[A-Za-z].*\-.\d*\-.\d*$" |awk '{ printf "%s,", $0 }'|sed 's/.$//'`
+PeakCols=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$" |awk '{ printf "%s,", $0 }'|sed 's/.$//'`
 TE='TE'
 TePeakCols="$TE,$PeakCols" 	
 echo $TePeakCols > TePeakCols.txt
@@ -17,7 +17,7 @@ echo $TePeakCols > TePeakCols.txt
 #sed 's/,/\n/g' TePeakCols.txt |head -n 5
 #sed 's/,/\n/g' TePeakCols.txt |tail -n 5
 
-numPeaks=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' | grep -P "^[A-Za-z].*\-.\d*\-.\d*$" |wc -l`
+numPeaks=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' | grep -P "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$" |wc -l`
 divisor=2500
 quotient=`expr $numPeaks / $divisor`
 
