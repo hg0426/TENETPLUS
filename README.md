@@ -22,25 +22,7 @@ Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014
 https://github.com/neocaleb/TENET
 
 
-## 1. Run TENET using expression data in a csv file and pseudotime result in a text file
-#### Usage
-
-	./TENET [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length]
-	
-#### example
-
-	./TENET merged_expression_data.csv 10 trajectory.txt cell_select.txt 1
-
-## 1-1. Run TENET from TF to target using expression data in a csv file and pseudotime result in a text file
-#### Usage
-
- 	./TENET_TF [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [species]
-	
-#### example
-
-	 ./TENET_TF merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 human
-	 
-## 1-2. Run TENETPLUS from TF to target and peak source once using expression data in a csv file and pseudotime result in a text file
+## 1. Run TENETPLUS from TF to target and peak source once using expression data in a csv file and pseudotime result in a text file after make result matrix split matrix
 #### Usage
 
  	./TENET_Plus [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [species]
@@ -49,19 +31,14 @@ https://github.com/neocaleb/TENET
 
 	./TENET_Plus merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 human
 	
-## 2 split result matrix (detect peak standard : xxx [- or :] xxxx [- or :] xxxx)
+#### output
 
-#### Usage
-
- 	sh getMatrix_rowTF_colGN_AB-matrix.sh [TENET result matrix] [species]
- 	sh getMatrix_rowTF_colPK_C-matrix.sh [TENET result matrix] [species]
-	
-#### example
-
-	 sh getMatrix_rowTF_colGN_AB-matrix.sh TE_result_matrix.txt mouse
-	 sh getMatrix_rowTF_colPK_C-matrix.sh TE_result_matrix.txt mouse
-	
-## 3 Reconstructing GRN
+	TE_result_matrix_rowTF_colPK.txt
+	TE_result_matrix_rowTF_colGN.txt
+	TE_result_matrix_rowPeak_colGN.txt
+	TE_result_matrix.txt
+ 
+## 2. Reconstructing GRN
 
 #### Usage
 
@@ -71,8 +48,13 @@ https://github.com/neocaleb/TENET
 
  	python make_GRN_new.py TE_result_matrix_rowTF_colGN.txt 0.01 
  	python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt 0.01
+
+###### Output file
+	TE_result_matrix_rowTF_colPK.sif
+	TE_result_matrix_rowTF_colGN.sif
+ 	TE_result_matrix_rowPeak_colGN.sif
 	
-## 4 Counting out-degree of a given GRN
+## 3. Counting out-degree of a given GRN
 
 #### Usage
  	python countOutdegree.py [name of GRN]
