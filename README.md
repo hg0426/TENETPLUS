@@ -40,14 +40,14 @@ https://github.com/neocaleb/TENET
 
 	 ./TENET_TF merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 human
 	 
-## 1-2. Run TENET from selected gene peak to target using expression data in a csv file and pseudotime result in a text file
+## 1-2. Run TENETPLUS from TF to target and peak source once using expression data in a csv file and pseudotime result in a text file
 #### Usage
 
- 	./TENET_select [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [selcet_list]
+ 	./TENET_Plus [merged_expression_file_name] [number_of_threads] [trajectory_file_name] [cell_select_file_name] [history_length] [species]
 	
 #### example
 
-	 ./TENET_select merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 select_list.txt
+	./TENET_Plus merged_expression_data.csv 10 trajectory.txt cell_select.txt 1 human
 	
 ## 2 split result matrix (detect peak standard : xxx [- or :] xxxx [- or :] xxxx)
 
