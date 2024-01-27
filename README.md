@@ -1,6 +1,6 @@
 # TENETPLUS
 
-A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo-time ordered single cell transcriptomic data 
+A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo-time ordered single cell transcriptomic and epigenetic data 
 
 ## multiome version (non-multiome version is under construction)
 
