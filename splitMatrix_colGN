@@ -7,15 +7,15 @@
 
 TE_mtrx="$1"
 
-head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -v "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$" |wc -l
+head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
 
-head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -v "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$"|awk '{ printf "%s,", $0 }'|sed 's/.$//' > TeGeneCols.txt
+head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |awk '{ printf "%s,", $0 }'|sed 's/.$//' > TeGeneCols.txt
 
 #sed 's/,/\n/g' TeGeneCols.txt |wc -l
 #sed 's/,/\n/g' TeGeneCols.txt |head -n 5
 #sed 's/,/\n/g' TeGeneCols.txt |tail -n 5
 
-numGenes=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' | grep -v "^[A-Za-z][^-:]*[-:][^-:]*[-:][^-:]*[0-9]$" |wc -l`
+numGenes=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' | grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l`
 divisor=2500
 quotient=`expr $numGenes / $divisor`
 

@@ -6,6 +6,7 @@ import os
 import csv
 import sys
 import datetime
+import pandas as pd
 
 # Change location of jar to match yours:
 abspath = os.path.abspath(sys.argv[0])
@@ -34,14 +35,15 @@ trajectory1=numpy.array(trajectory1)
 trajectory1=trajectory1[branch==1]
 trajectory1SortIndex=numpy.argsort(trajectory1)
 
-cell_gene_all = numpy.genfromtxt('cell_gene_trsps.csv',delimiter=',')
+### 
+cell_gene_all = pd.read_csv('cell_gene_trsps.csv', delimiter=',', header=None).to_numpy()
+#cell_gene_all = numpy.genfromtxt('cell_gene_trsps.csv',delimiter=',')
 #cell_gene_all = cell_gene_all.astype(int)
 
 expression_data = []
 input_fname = sys.argv[1]
 #input_fname='pair_jobs/pair_list_aaa'
-list_pairs = numpy.genfromtxt(input_fname,delimiter=',')
-list_pairs = list_pairs.astype(int)
+list_pairs = pd.read_csv(input_fname, delimiter=',', header=None).to_numpy().astype(int)
 #cg_file = open('list_genefiles')
 #lines = cg_file.readlines()
 TEresult=[None] * len(list_pairs)
