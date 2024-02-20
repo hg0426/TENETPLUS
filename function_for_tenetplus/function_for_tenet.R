@@ -580,5 +580,7 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
     dev.off()
   }
   cat('\n')
+  return(trim_result)
+                                  
 }
 
