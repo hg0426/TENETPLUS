@@ -18,3 +18,8 @@ cmd = "python countOutdegree.py TE_result_matrix_rowTF_colGN.fdr0.01.trimIndirec
 print(cmd)
 os.system(cmd)
 
+#===========================================================================================
+
+cmd = "python make_GRN_new.py TE_result_matrix_rowPeak_colGN.txt 0.01"
+print(cmd)
+os.system(cmd)
