@@ -15,9 +15,9 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 
 ## Dependency
 
-python3
-openmpi (>4.0)
-JPype
+	python3
+	openmpi (>4.0)
+	JPype
 
 ## Citation
 
