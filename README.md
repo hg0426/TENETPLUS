@@ -66,6 +66,8 @@ https://github.com/neocaleb/TENET
 
 ###### Output file
 	TE_result_matrix_rowTF_colGN.fdr0.01.trimIndirect-0.01.sif
+###### Parameter
+	[cutoff] - A cutoff value for trimming indirect edges. Recommended range is -0.1 to 0.1
 
 
 ## 4. Counting out-degree of a given GRN
