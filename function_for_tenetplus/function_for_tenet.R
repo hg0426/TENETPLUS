@@ -815,7 +815,7 @@ make_GRN_graph <- function(input_list, nodes="nodes",edges="edges",node_sizes="n
     }else if (temp_nodes[i] %in% input_list$TF){
       node_colors_temp[i] <- "orange"
     }else if (temp_nodes[i] %in% input_list$peak){
-      node_colors_temp[i] <- "blue"
+      node_colors_temp[i] <- "skyblue"
     }
   }
   
