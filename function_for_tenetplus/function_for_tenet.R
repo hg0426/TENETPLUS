@@ -698,7 +698,7 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
                    breaks = seq(p_min,p_max,length.out=100),show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=filename,fontsize=fontsize)
   }else{
     s1 <- pheatmap(final_matrix[2:dim(final_matrix)[1],pheat_start:dim(final_matrix)[2]],
-                   show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=title,fontsize=fontsize)
+                   show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=filename,fontsize=fontsize)
     
   }
   if (save_file==T) {
