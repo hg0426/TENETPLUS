@@ -2,10 +2,11 @@ print("functions_for_TENET_attached_ver.2024.02.21")
 library(ggplot2)
 library(pheatmap)
 library(stringr)
+library(igraph)
 
 TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.frame("non","non"),
                        PAG_list=as.data.frame("non","non"),top_gene_num=20,highlight_gene="",ven = F,fill_col = "grey19",
-                       highlight_col = "brown4",save_files = F,
+                       highlight_col = "brown4",save_files = F,font_size=10,
                        name_RNA="TE_result_RNA_count_outdegree",
                        name_ATAC="TE_result_ATAC_count_outdegree",
                        name_trim="TE_result_trim_count_outdegree",width = 18, height = 10) {
@@ -26,7 +27,7 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     p <- ggplot(data=top_genes, aes(x=reorder(Var1, Freq), y=Freq)) + geom_bar(stat="identity",fill=cols) +
       theme(plot.margin=unit(c(0.5,5,0.5,5), 'cm'))+
       xlab("") + ylab("") + ggtitle(name_RNA)  +
-      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"))
+      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"),text = element_text(size = font_size))
     
     
     p + coord_flip()
@@ -54,7 +55,7 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     p <- ggplot(data=top_genes, aes(x=reorder(Var1, Freq), y=Freq)) + geom_bar(stat="identity",fill=cols) +
       theme(plot.margin=unit(c(0.5,5,0.5,5), 'cm'))+
       xlab("") + ylab("") + ggtitle(name_ATAC)  +
-      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"))
+      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"),text = element_text(size = font_size))
     
     
     p + coord_flip()
@@ -80,7 +81,7 @@ TE_barplot <- function(gene_list=as.data.frame("non","non"),peak_list=as.data.fr
     p <- ggplot(data=top_genes, aes(x=reorder(Var1, Freq), y=Freq)) + geom_bar(stat="identity",fill=cols) +
       theme(plot.margin=unit(c(0.5,5,0.5,5), 'cm'))+
       xlab("") + ylab("") + ggtitle(name_trim)  +
-      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"))
+      theme(plot.title = element_text(hjust = 0.5),axis.text = element_text(face="bold"),text = element_text(size = font_size))
     
     
     p + coord_flip()
