@@ -586,7 +586,7 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
 
 pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_cell_select=F,cell_select=F,total_peak_gene,pseudotime, span=0.5,use_pseudotime_origin = T, use_z_score = T,
                                 order_pseudo_score=F,p_min=-0.7,p_max=0.7,p_legend=T,filename = "pseudotime_heatmap",out_dataset=NULL,
-                                max_min = T,out_result =F,target_average = F, target,pseudo_decrease=T,save_file=T,out_plot=T){
+                                max_min = T,out_result =F,target_average = F, target,pseudo_decrease=T,save_file=T,out_plot=T,fontsize=15){
   #====================subset & order by pseudotime =================
   sub_matrix <- matrix[,selected_gene]
   sub_matrix <- cbind(pseudotime,sub_matrix)
@@ -695,10 +695,10 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
   if(max_min==T){
     
     s1 <- pheatmap(final_matrix[2:dim(final_matrix)[1],pheat_start:dim(final_matrix)[2]],
-                   breaks = seq(p_min,p_max,length.out=100),show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend)
+                   breaks = seq(p_min,p_max,length.out=100),show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=filename,fontsize=fontsize)
   }else{
     s1 <- pheatmap(final_matrix[2:dim(final_matrix)[1],pheat_start:dim(final_matrix)[2]],
-                   show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend)
+                   show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=title,fontsize=fontsize)
     
   }
   if (save_file==T) {
