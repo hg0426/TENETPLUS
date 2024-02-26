@@ -711,3 +711,110 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
     return(final_matrix)
   }
 }
+
+mytriangle <- function(coords, v = 
+                         NULL, params) {
+  vertex.color <- params("vertex", "color")
+  if (length(vertex.color) != 1 && !is.null(v)) {
+    vertex.color <- vertex.color[v]
+  }
+  vertex.size <- 1 / 200 * params("vertex", "size")
+  if (length(vertex.size) != 1 && !is.null(v)) {
+    vertex.size <- vertex.size[v]
+  }
+  
+  symbols(
+    x = coords[, 1], y = coords[, 2], bg = vertex.color,
+    stars = cbind(vertex.size, vertex.size, vertex.size),
+    add = TRUE, inches = FALSE
+  )
+}
+add_shape("triangle",
+          clip = shapes("circle")$clip,
+          plot = mytriangle
+)
+
+make_GRN_graph <- function(input_list, nodes="nodes",edges="edges",node_sizes="node_sizes",
+                           node_label_sizes = "node_label_sizes",node_colors = "node_colors",
+                           node_shapes = "node_shapes", min_node_size = 5, min_size_cutoff = 5,
+                           min_size = 5,min_node_label_size = 1){
+  temp_nodes <- unique(c(input_list$TF,input_list$gene,input_list$peak))
+  assign(paste0(nodes),temp_nodes, envir = .GlobalEnv)
+  
+  node_shapes_temp <- rep("circle",length(temp_nodes))
+  for(i in 1:length(temp_nodes)){
+    if (temp_nodes[i] %in% input_list$gene){
+      node_shapes_temp[i] <- "triangle"
+      if(temp_nodes[i] %in% input_list$TF){
+        node_shapes_temp[i] <- "circle"
+      }
+    }else if (temp_nodes[i] %in% input_list$TF){
+      node_shapes_temp[i] <- "circle"
+    }else if (temp_nodes[i] %in% input_list$peak){
+      node_shapes_temp[i] <- "square"
+    }
+    #print(paste0(nodes[i],"_",node_shapes_temp[i]))
+  }
+
+  assign(paste0(node_shapes),node_shapes_temp, envir = .GlobalEnv)  
+  
+  temp_edges <- cbind(c(input_list$TF),c(input_list$gene))
+  temp_edges2 <- cbind(c(input_list$peak),c(input_list$gene))
+  temp_edges3 <- cbind(c(input_list$TF),c(input_list$peak))
+  total_edges <- rbind(temp_edges,temp_edges2,temp_edges3)
+  total_edges <- as.matrix(total_edges)
+  assign(edges,total_edges, envir = .GlobalEnv)  
+  
+  
+  input_count <- count_degree(input_list)
+  size_dict <- as.list(input_count$Freq)
+  names(size_dict) <- input_count$Var1
+  
+  # 각 노드의 크기 설정
+  node_sizes_temp <- sapply(temp_nodes, function(temp_nodes) {
+    if (is.null(size_dict[[temp_nodes]])) {
+      # NULL 값인 경우 기본값으로 설정
+      return(min_node_size)  # 또는 다른 기본값 지정 가능
+    }else if(size_dict[[temp_nodes]] <= min_size_cutoff){
+      return(min_node_size)
+    }else {
+      # NULL 값이 아닌 경우 해당 크기 값 반환
+      return(size_dict[[temp_nodes]])
+    }
+  })
+  
+  assign(paste0(node_sizes),node_sizes_temp, envir = .GlobalEnv)
+  
+  node_label_sizes_temp <- sapply(temp_nodes, function(temp_nodes) {
+    if (is.null(size_dict[[temp_nodes]])) {
+      # NULL 값인 경우 기본값으로 설정
+      return(min_node_label_size)  # 또는 다른 기본값 지정 가능
+    }else if(size_dict[[temp_nodes]] <= min_size_cutoff){
+      return(min_node_label_size)
+    }else {
+      # NULL 값이 아닌 경우 해당 크기 값 반환
+      #return(2.5)
+      return(size_dict[[temp_nodes]]/5)
+    }
+  })
+  assign(paste0(node_label_sizes),node_label_sizes_temp, envir = .GlobalEnv)
+  
+  node_colors_temp <- rep("orange",length(temp_nodes))
+  for(i in 1:length(temp_nodes)){
+    if (temp_nodes[i] %in% input_list$gene){
+      node_colors_temp[i] <- "green"
+      if(temp_nodes[i] %in% input_list$TF){
+        node_colors_temp[i] <- "orange"
+      }
+    }else if (temp_nodes[i] %in% input_list$TF){
+      node_colors_temp[i] <- "orange"
+    }else if (temp_nodes[i] %in% input_list$peak){
+      node_colors_temp[i] <- "blue"
+    }
+  }
+  
+  assign(paste0(node_colors),node_colors_temp, envir = .GlobalEnv)
+  
+  graph <- graph_from_data_frame(total_edges, directed = TRUE, vertices = as.character(temp_nodes))
+  return(graph)
+}
