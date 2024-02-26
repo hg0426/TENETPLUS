@@ -56,7 +56,8 @@ https://github.com/neocaleb/TENET
 	
 
 ## 3. Trimming indirect edges for TF_Gene result
-##### Trimming result only for AB matrix
+
+##### Trimming only AB matrix (original_TENET)
 #### Usage
  	python trim_indirect.py [AB matrix] [cutoff]
 	
