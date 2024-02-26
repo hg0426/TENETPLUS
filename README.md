@@ -13,6 +13,11 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 
 </div>
 
+## Dependency
+
+python3
+openmpi (>4.0)
+JPype
 
 ## Citation
 
