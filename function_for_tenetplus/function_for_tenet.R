@@ -737,7 +737,7 @@ add_shape("triangle",
 make_GRN_graph <- function(input_list, nodes="nodes",edges="edges",node_sizes="node_sizes",
                            node_label_sizes = "node_label_sizes",node_colors = "node_colors",
                            node_shapes = "node_shapes", min_node_size = 5, min_size_cutoff = 5,
-                           min_size = 5,min_node_label_size = 1){
+                           min_size = 5,min_node_label_size = 1,node_size_adjust=1){
   temp_nodes <- unique(c(input_list$TF,input_list$gene,input_list$peak))
   assign(paste0(nodes),temp_nodes, envir = .GlobalEnv)
   
@@ -779,7 +779,7 @@ make_GRN_graph <- function(input_list, nodes="nodes",edges="edges",node_sizes="n
       return(min_node_size)
     }else {
       # NULL 값이 아닌 경우 해당 크기 값 반환
-      return(size_dict[[temp_nodes]])
+      return(size_dict[[temp_nodes]]*node_size_adjust)
     }
   })
   
