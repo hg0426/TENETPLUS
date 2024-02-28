@@ -700,6 +700,38 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
                    show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=filename,fontsize=fontsize)
     
   }
+  if(cell_aanotaion!=NULL){
+  cell_aanotaion <- cbind(pseudotime,cell_aanotaion)
+  cell_aanotaion <- subset(cell_aanotaion,cell_aanotaion[,1]!="Inf" & cell_aanotaion[,1]!="NA")
+  cell_pseudo_order <- order(cell_aanotaion[,1])
+  cell_aanotaion <- cell_aanotaion[cell_pseudo_order,]
+  cell_aanotaion_list <- as.data.frame(cell_aanotaion[,2])
+  rownames(cell_aanotaion_list) <- rownames(cell_aanotaion)
+  cell_type_list <- unique(cell_aanotaion[,2])
+  cell_type_list
+  color_list <- c('#F68282','#31C53F','#1FA195','#B95FBB','#D4D915','#28CECA','#ff9a36','#2FF18B','#aeadb3','#faf4cf',
+                  '#CCB1F1','#25aff5','#A4DFF2','#4B4BF7','#AC8F14','#E6C122')
+  aano_colors <- c()
+  kk <- 1
+  for (z in cell_type_list) {
+    aano_colors_temp <- c(paste0('"', z, '" = "', color_list[kk], '"'))
+    aano_colors <- c(aano_colors,aano_colors_temp)
+    kk <- kk+1
+  }
+  aano_colors
+  aano_colors <- as.list(aano_colors)
+  aano_colors
+  if(max_min==T){
+    s1 <- pheatmap(final_matrix[2:dim(final_matrix)[1],1:dim(final_matrix)[2]],
+           show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,annotation = cell_aanotaion_list,
+           annotation_colors = anno_colors,breaks = seq(p_min,p_max,length.out=100),main=filename,fontsize=fontsize)
+  }else{
+        s1 <- pheatmap(final_matrix[2:dim(final_matrix)[1],1:dim(final_matrix)[2]],
+           show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,annotation = cell_aanotaion_list,
+           annotation_colors = anno_colors,breaks = seq(-0.4,0.4,length.out=100),main=filename,fontsize=fontsize) 
+  }
+
+}
   if (save_file==T) {
     png(paste0(filename,".png"),width=6000,height=4000,res=500)
     print(s1)
@@ -713,7 +745,6 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
   if (out_plot==T){
     return(s1)
   }
-
 }
 
 mytriangle <- function(coords, v = 
