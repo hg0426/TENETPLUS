@@ -570,14 +570,13 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
     } else if (trim_indirect == F) {
        result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance",trim_distance_temp,"_TE_result_matrix.sif")
       }
-    }
     write.table(trim_result,result_name,quote = F,row.names = F,col.names = T)
     plot_name=gsub("_TE_result_matrix.sif",".pdf",basename(result_name))
     plot_name=gsub("trimmed_by_","Outdegree_",plot_name)
     pdf(paste0(Tenet_result_dir,"/",plot_name))
     print(outdegree_plot)
     dev.off()
-  }
+    }
   cat('\n')
   return(trim_result)
                                   
