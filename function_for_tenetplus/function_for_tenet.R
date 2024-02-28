@@ -422,7 +422,15 @@ split_mtx_C <- function(TE_matrix,species){
   system(paste0("sh /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/function_for_tenetplus/script/getMatrix_rowTF_colPK_C-matrix.sh ",TE_matrix," ",species))
 }
 
-
+convertNumberToUnit <- function(x) {
+  if(x >= 1000 & x < 1000000) {
+    return(paste(x / 1000, "K"))
+  } else if(x >= 1000000) {
+    return(paste(x / 1000000, "M"))
+  } else {
+    return(as.character(x))
+  }
+}
 
 function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
                                          gene_anno=gene_anno,
@@ -556,21 +564,11 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
     theme(plot.title = element_text(hjust = 0.5,size=20),axis.text = element_text(face="bold"))+
     coord_flip()
   if (save == T){
+    trim_distance_temp <- convertNumberToUnit(trim_distance)
     if (trim_indirect == T) {
-      if (trim_distance == 1000){
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance1K_Indirect-0.01_TE_result_matrix.sif")
-      } else if (trim_distance == 1000000){
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance1M_Indirect-0.01_TE_result_matrix.sif")
-      } else if (trim_distance==0) {
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_Peaksource_Indirect-0.01_TE_result_matrix.sif")
-      }
+      result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance",trim_distance_temp,"_Indirect-0.01_TE_result_matrix.sif")
     } else if (trim_indirect == F) {
-      if (trim_distance== 1000){
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance1K_TE_result_matrix.sif")
-      } else if (trim_distance==1000000){
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance1M_TE_result_matrix.sif")
-      } else if (trim_distance==0){
-        result_name=paste0(Tenet_result_dir,"/trimmed_by_Peaksource_TE_result_matrix.sif")
+       result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance",trim_distance_temp,"_TE_result_matrix.sif")
       }
     }
     write.table(trim_result,result_name,quote = F,row.names = F,col.names = T)
@@ -584,6 +582,7 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
   return(trim_result)
                                   
 }
+
 
 pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_cell_select=F,cell_select=F,total_peak_gene,pseudotime, span=0.5,use_pseudotime_origin = T, use_z_score = T,
                                 order_pseudo_score=F,p_min=-0.7,p_max=0.7,p_legend=T,filename = "pseudotime_heatmap",out_dataset=NULL,
