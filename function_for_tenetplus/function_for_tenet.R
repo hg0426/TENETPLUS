@@ -700,7 +700,7 @@ pseudotime_heatmap2 <- function(matrix,selected_gene,gene_list,peak_list=F,ues_c
                    show_colnames=F, cluster_rows = F, cluster_cols = F,legend = p_legend,main=filename,fontsize=fontsize)
     
   }
-  if(cell_aanotaion!=NULL){
+  if(is.null(cell_aanotaion)==F){
   cell_aanotaion <- cbind(pseudotime,cell_aanotaion)
   cell_aanotaion <- subset(cell_aanotaion,cell_aanotaion[,1]!="Inf" & cell_aanotaion[,1]!="NA")
   cell_pseudo_order <- order(cell_aanotaion[,1])
