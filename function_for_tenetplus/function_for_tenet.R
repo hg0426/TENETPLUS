@@ -517,7 +517,9 @@ function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
   head(rowPeak_colGN);dim(rowPeak_colGN)
   
   rowPeak_colGN_dist_file <- paste0(Tenet_result_dir,"/TE_result_matrix_rowPeak_colGN.fdr0.01_AddDist.sif")
-  write.table(rowPeak_colGN,rowPeak_colGN_dist_file,row.names = F,quote = F,col.names = T)
+  if (save == T){
+    write.table(rowPeak_colGN,rowPeak_colGN_dist_file,row.names = F,quote = F,col.names = T)
+    }
   cat('\n')
   
   # Trimming -------------------------------------------------------------
