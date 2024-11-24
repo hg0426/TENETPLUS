@@ -4,7 +4,7 @@ create_heatmap <- function(df1, df2, top_n = 10, significance_threshold = 0.05) 
   library(stringr)
   library(pheatmap)
   library(RColorBrewer)
-  
+  library(tibble)
   # GO 용어에서 숫자 제거 함수
   remove_go <- function(term) {
     str_remove(term, "\\s*\\(GO:\\d+\\)")
