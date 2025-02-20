@@ -273,3 +273,7 @@ python make_GRN_new.py TE_result_matrix_rowTF_colPK.txt 0.01
 python make_GRN_new.py TE_result_matrix_rowPeak_colGN.txt 0.01
 python trim_indirect.py TE_result_matrix_rowTF_colGN.fdr0.01.sif 0
 
+
+
+
+
