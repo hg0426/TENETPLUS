@@ -28,7 +28,7 @@ setMethod("show", "TENET", function(object) {
   cat("Peaks (ATAC):", peak_count, "\n")
   cat("Pseudo entries:", nrow(meta), "\n")
   selected_count <- sum(meta$select == 1, na.rm = TRUE)
-  cat("Pseudo entries (selected cells):", selected_count, "\n")
+  cat("Selected cells:", selected_count, "\n")
   other_cols <- setdiff(colnames(meta), c("pseudotime", "Species"))
   if (length(other_cols) > 0) {
     cat("Additional metadata columns:", paste(other_cols, collapse = ", "), "\n")
