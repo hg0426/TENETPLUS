@@ -25,7 +25,12 @@
 .onLoad <- function(libname, pkgname) {
   # Set the bash script path inside the package
   bash_script <- system.file("bash", "TENET_Plus_for_py", package = "TENETPLUS")
-  
+  if (file.exists(bash_script)) {
+        # Set executable permission
+        system(paste("chmod +x", shQuote(bash_script)))
+  } else {
+        warning("TENET_Plus_for_py script not found in package.")
+  }
   if (!file.exists(bash_script) || bash_script == "") {
     stop("Error: TENETPLUS bash script not found! Ensure 'TENET_Plus_for_py' is inside 'inst/bash/'.")
   }
