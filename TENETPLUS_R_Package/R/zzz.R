@@ -24,7 +24,7 @@
 
 .onLoad <- function(libname, pkgname) {
   # Set the bash script path inside the package
-  bash_script <- system.file("bash", "TENET_Plus_for_py", package = "TENETPLUS")
+  bash_script <- system.file("bash", "TENET_Plus_for_py.sh", package = "TENETPLUS")
   if (file.exists(bash_script)) {
         # Set executable permission
         system(paste("chmod +x", shQuote(bash_script)))
