@@ -8,7 +8,7 @@ License: GPL-3
 Encoding: UTF-8
 Depends: R (>= 4.0)
 Imports: dplyr, ggplot2, ggrepel, stringr, Matrix, Seurat, methods,
-        circlize, ComplexHeatmap, RColorBrewer, BiocManager
+        circlize, ComplexHeatmap, RColorBrewer, BiocManager,grid
 Suggests: devtools, testthat
 Remotes:
     jokergoo/ComplexHeatmap
