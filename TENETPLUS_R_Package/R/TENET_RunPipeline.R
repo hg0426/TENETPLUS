@@ -321,7 +321,7 @@ runTENETPlus <- function(obj,
   if (file.exists(tfTgFile)) {
     tfTgDF <- readSifToDF(tfTgFile)
     if (!is.null(tfTgDF)) {
-      all_results$TF_TG <- tfTgDF
+      all_results$TF_TG_indirect <- tfTgDF
     }
   }
 
