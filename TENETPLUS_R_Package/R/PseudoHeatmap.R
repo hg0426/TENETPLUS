@@ -46,6 +46,7 @@
 #' @import RColorBrewer
 #' @import stringr
 #' @import circlize
+#' @import grid
 #'
 #' @export
 PseudoHeatmap <- function(object,
