@@ -264,7 +264,7 @@ runTENETPlus <- function(obj,
     TF_TG   = NULL,
     TF_TAR  = NULL,
     TAR_TG  = NULL,
-    TF_GN_indirect  = NULL
+    TF_TG_indirect  = NULL
   )
 
   # Copy result files from source_dir and outdir if necessary
