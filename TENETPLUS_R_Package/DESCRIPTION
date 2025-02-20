@@ -10,6 +10,8 @@ Depends: R (>= 4.0)
 Imports: dplyr, ggplot2, ggrepel, stringr, Matrix, Seurat, methods,
         circlize, ComplexHeatmap, RColorBrewer, BiocManager
 Suggests: devtools, testthat
+Remotes:
+    jokergoo/ComplexHeatmap
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 NeedsCompilation: no
