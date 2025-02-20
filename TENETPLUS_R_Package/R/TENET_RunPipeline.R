@@ -32,7 +32,13 @@ runTENETPlus <- function(obj,
     dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
   }
   if (is.null(bashFile)) {
-    bashFile <- system.file("bash", "TENET_Plus_for_py.sh", package = "TENETPLUS")
+    bashFile <- system.file("bash", "TENET_Plus_for_py", package = "TENETPLUS")
+    if (file.exists(bashFile)) {
+        # Set executable permission
+      system(paste("chmod +x", shQuote(bashFile)))
+    } else {
+        warning("TENET_Plus_for_py script not found in package.")
+    }
    # stop("Please provide 'bashFile' that points to TENET_Plus_for_py.sh.")
   }
   if (!file.exists(bashFile)) {
