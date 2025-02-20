@@ -6,7 +6,7 @@ Authors@R: c(person("Your Name", "Surname", email = "your_email@example.com", ro
 Description: This package provides an implementation of the TENET+ pipeline for RNA and ATAC data analysis.
 License: GPL-3
 Encoding: UTF-8
-Depends: R (>= 4.0)
+Depends: R (>= 4.0),Seurat(>= 5.0.0)
 Imports: dplyr, ggplot2, ggrepel, stringr, Matrix, Seurat, methods
 Suggests: devtools, testthat
 Roxygen: list(markdown = TRUE)
