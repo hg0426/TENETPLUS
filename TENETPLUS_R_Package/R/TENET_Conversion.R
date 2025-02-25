@@ -16,13 +16,14 @@ SeuratToTENET <- function(seurat_obj,
                           Species = "human",
                           DEG = list(), DAR = list(), TF_list = list(),
                           pseudotime = "pseudotime",
-                          cell_select = "cell_select") {
+                          cell_select = "cell_select",
+                         layer = "counts") {
   if (!("RNA" %in% names(seurat_obj@assays))) {
     stop("Seurat object does not have an RNA assay.")
   }
-  rna_counts <- GetAssayData(seurat_obj, assay = "RNA", layer = "counts")
+  rna_counts <- GetAssayData(seurat_obj, assay = "RNA", layer = layer)
   if ("ATAC" %in% names(seurat_obj@assays)) {
-    atac_counts <- GetAssayData(seurat_obj, assay = "ATAC", layer = "counts")
+    atac_counts <- GetAssayData(seurat_obj, assay = "ATAC", layer = layer)
   } else {
     warning("Seurat object does not have an ATAC assay; using an empty matrix.")
     atac_counts <- matrix(0, nrow = 0, ncol = ncol(rna_counts))
