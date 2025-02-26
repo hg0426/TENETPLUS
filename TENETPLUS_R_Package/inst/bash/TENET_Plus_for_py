@@ -165,7 +165,7 @@ if [ "$7" -eq 1 ] || [ "$7" -eq 5 ]; then
   done
 
   paste TMP* > ${TE_mtrx%.txt}_colGN.txt
-  awk '{print NF; exit}' ${TE_mtrx%.txt}_colGN.txt
+  #awk '{print NF; exit}' ${TE_mtrx%.txt}_colGN.txt
 
   rm tmp* TMP* TeGeneCols.txt
 
@@ -224,7 +224,7 @@ if [ "$7" -ne 5 ]; then
     done
   
     paste TMP* > ${TE_mtrx%.txt}_colGN.txt
-    awk '{print NF; exit}' ${TE_mtrx%.txt}_colGN.txt
+    #awk '{print NF; exit}' ${TE_mtrx%.txt}_colGN.txt
   
     rm tmp* TMP* TeGeneCols.txt
   fi
@@ -258,7 +258,7 @@ if [ "$7" -ne 5 ]; then
     done
   
     paste TMP* > ${TE_mtrx%.txt}_colPK.txt
-    awk '{print NF; exit}' ${TE_mtrx%.txt}_colPK.txt
+    #awk '{print NF; exit}' ${TE_mtrx%.txt}_colPK.txt
   
     rm tmp* TMP* TePeakCols.txt
   fi
