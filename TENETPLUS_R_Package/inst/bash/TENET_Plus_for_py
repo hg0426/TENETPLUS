@@ -144,7 +144,7 @@ if [ "$7" -eq 1 ] || [ "$7" -eq 5 ]; then
   #split col GN
   TE_mtrx="TE_result_matrix_rowPeak.txt"
 
-  head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
+  #head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
 
   head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |awk '{ printf "%s,", $0 }'|sed 's/.$//' > TeGeneCols.txt
 
@@ -159,7 +159,7 @@ if [ "$7" -eq 1 ] || [ "$7" -eq 5 ]; then
   #https://stackoverflow.com/questions/36471244/print-certains-columns-by-header-name-with-spaces-on-it-awk-sed
   for ((i=0;i<=$quotient;i++))
   do
-  echo $i
+  #echo $i
   cut -d "," -f $((1+$divisor*$i))-$(($divisor*$((i+1)))) TeGeneCols.txt > tmp$i
   awk -v cols=`cat tmp$i` 'BEGIN{FS=OFS="\t"; nc=split(cols, a, ",")} NR==1{for (i=1; i<=NF; i++) hdr[$i]=i} {for (i=1; i<=nc; i++) if (a[i] in hdr) printf "%s%s", $hdr[a[i]], (i<nc?OFS:ORS)}' $TE_mtrx >TMP$i
   done
@@ -184,7 +184,7 @@ if [ "$7" -ne 5 ]; then
   cut -f 1 $TE_mtrx | sort > TE_Matrix.sort.tmp
   sort $TF_list > TFs.sort.tmp
   comm -12 TE_Matrix.sort.tmp TFs.sort.tmp > TFs.comm.tmp
-  wc -l *tmp
+  #wc -l *tmp
   cut -d$'\t' -f 1 $TE_mtrx > rowNames.tmp
 
   for i in `cat  TFs.comm.tmp`; do grep -n -w ^$i$ rowNames.tmp; done | cut -d":" -f 1 > LN.tmp
@@ -201,7 +201,7 @@ if [ "$7" -ne 5 ]; then
     #split col GN
     TE_mtrx="TE_result_matrix_rowTF.txt"
 
-    head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
+    #head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
 
     head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -vE "^chr[0-9XY]+-([0-9]+)-([0-9]+)$"|awk '{ printf "%s,", $0 }'|sed 's/.$//' > TeGeneCols.txt
 
@@ -213,12 +213,12 @@ if [ "$7" -ne 5 ]; then
     divisor=2500
     quotient=`expr $numGenes / $divisor`
   
-    echo $numGenes $divisor $quotient
+    #echo $numGenes $divisor $quotient
   
     #https://stackoverflow.com/questions/36471244/print-certains-columns-by-header-name-with-spaces-on-it-awk-sed
     for ((i=0;i<=$quotient;i++))
     do
-    echo $i
+    #echo $i
     cut -d "," -f $((1+$divisor*$i))-$(($divisor*$((i+1)))) TeGeneCols.txt > tmp$i
     awk -v cols=`cat tmp$i` 'BEGIN{FS=OFS="\t"; nc=split(cols, a, ",")} NR==1{for (i=1; i<=NF; i++) hdr[$i]=i} {for (i=1; i<=nc; i++) if (a[i] in hdr) printf "%s%s", $hdr[a[i]], (i<nc?OFS:ORS)}' $TE_mtrx >TMP$i
     done
@@ -233,7 +233,7 @@ if [ "$7" -ne 5 ]; then
     echo 'Split Matrix colPK'
     #split col PK
     TE_mtrx="TE_result_matrix_rowTF.txt"
-    head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
+    #head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |wc -l
 
     PeakCols=`head -n 1 $TE_mtrx |sed 's/\t/\n/g' |grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" |awk '{ printf "%s,", $0 }'|sed 's/.$//'`
     TE='TE'
@@ -247,12 +247,12 @@ if [ "$7" -ne 5 ]; then
     divisor=2500
     quotient=`expr $numPeaks / $divisor`
 
-    echo $numPeaks $divisor $quotient
+    #echo $numPeaks $divisor $quotient
 
     #https://stackoverflow.com/questions/36471244/print-certains-columns-by-header-name-with-spaces-on-it-awk-sed
     for ((i=0;i<=$quotient;i++))
     do
-    echo $i
+    #echo $i
     cut -d "," -f $((1+$divisor*$i))-$(($divisor*$((i+1)))) TePeakCols.txt > tmp$i
     awk -v cols=`cat tmp$i` 'BEGIN{FS=OFS="\t"; nc=split(cols, a, ",")} NR==1{for (i=1; i<=NF; i++) hdr[$i]=i} {for (i=1; i<=nc; i++) if (a[i] in hdr) printf "%s%s", $hdr[a[i]], (i<nc?OFS:ORS)}' $TE_mtrx >TMP$i
     done
