@@ -1,5 +1,5 @@
 import sys
-
+print('Indirect trimming')
 threshold=float(sys.argv[2])
 
 file_name=sys.argv[1]
