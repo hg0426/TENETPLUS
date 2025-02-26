@@ -20,9 +20,6 @@ trajectory = pd.read_csv(trajectory_file_path, header=None).squeeze('columns')
 # read cell_select
 cell_select = pd.read_csv(cell_select_file_path, header=None).squeeze('columns')
 
-print(len(df))
-print(len(cell_select))
-
 # validate
 if len(df) != len(cell_select):
     raise ValueError("The length of CSV file and cell_select file do not match.")
