@@ -104,7 +104,6 @@ fi
 
 cat ${matrix} | cut -d ',' -f 2- | tail -n +2 | sed 's/,/ /g' > cell_gene.tsv
 cat ${matrix} | head -n 1 | sed 's/\r//g' | cut -d ',' -f 2- | tr ',' '\n' > gene_names
-num_gene=`cat cell_gene.tsv | wc -l | sed -e 's/^[ \t]*//'`
 
 if [ "$7" -ne 0 ]; then
   echo 'Preprocessing(TENET_Plus)'
@@ -130,7 +129,7 @@ if [ "$7" -eq 1 ] || [ "$7" -eq 5 ]; then
 
   sort TE_peak_list.txt > TE_peak_list.sort.tmp
   comm -12 TE_Matrix.sort.tmp TE_peak_list.sort.tmp > TE_peak_list.comm.tmp
-  wc -l *tmp
+  #wc -l *tmp
   cut -d$'\t' -f 1 $TE_mtrx > rowNames.tmp
 
   for i in `cat  TE_peak_list.comm.tmp`; do grep -n -w ^$i$ rowNames.tmp; done | cut -d":" -f 1 > LN.tmp
