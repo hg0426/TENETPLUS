@@ -34,12 +34,11 @@ runTENETPlus <- function(obj,
   if (is.null(bashFile)) {
     bashFile <- system.file("bash", "TENET_Plus_for_py", package = "TENETPLUS")
     if (file.exists(bashFile)) {
-        # Set executable permission
+      # Set executable permission
       system(paste("chmod +x", shQuote(bashFile)))
     } else {
-        warning("TENET_Plus_for_py script not found in package.")
+      warning("TENET_Plus_for_py script not found in package.")
     }
-   # stop("Please provide 'bashFile' that points to TENET_Plus_for_py.sh.")
   }
   if (!file.exists(bashFile)) {
     stop("The specified bashFile does not exist: ", bashFile)
@@ -156,10 +155,10 @@ runTENETPlus <- function(obj,
   # List of necessary python scripts (called from the bash script using relative paths)
   python_scripts <- c("process_matrix.py",
                       "PreProcessScript_TE_Plus.py",
-                      'PreProcessScript_TENET_TF.py',
+                      "PreProcessScript_TENET_TF.py",
                       "runTE_for_py_CPU.py",
                       "makeTEasMatrix.py",
-                      'trim_indirect.py',
+                      "trim_indirect.py",
                       "make_GRN_new.py")
   for (ps in python_scripts) {
     src_ps <- file.path(source_dir, ps)
@@ -189,8 +188,9 @@ runTENETPlus <- function(obj,
   #################################
   # 7) Construct the command with working directory set to outdir
   #################################
+  # For Linux, add 'stdbuf -oL' to force line buffering so that output is displayed in real-time.
   cmd <- sprintf(
-    "cd %s && ./%s %s %d %s %s %d %s %d",
+    "cd %s && stdbuf -oL ./%s %s %d %s %s %d %s %d 2>&1",
     shQuote(normalizePath(outdir)),
     shQuote(basename(bashFile_new)),
     shQuote(normalizePath(matrix_csv_file)),
@@ -204,9 +204,10 @@ runTENETPlus <- function(obj,
   message("Running TENET+ command:\n", cmd)
 
   #################################
-  # 8) Run system command
+  # 8) Run system command and display output in real-time
   #################################
-  exit_code <- system(cmd, intern = FALSE, ignore.stdout = FALSE, ignore.stderr = FALSE)
+  # Using intern = FALSE streams the output directly to the console in real-time.
+  exit_code <- system(cmd, intern = FALSE)
   message("TENET+ exit code: ", exit_code)
 
   #################################
@@ -329,5 +330,3 @@ runTENETPlus <- function(obj,
 
   invisible(obj)
 }
-
-
