@@ -15,7 +15,8 @@ CreateTENET(
   TF_list = list(),
   feature_list = NULL,
   Species,
-  metadata = NULL
+  metadata = NULL,
+  ident = "orig.ident"
 )
 }
 \arguments{
