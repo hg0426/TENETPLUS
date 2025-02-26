@@ -20,6 +20,8 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
   
   if (!is.null(metadata)) {
     metadata_df <- metadata
+    metadata_df$select <- metadata_df[,cell_select]
+    metadata_df$pseudotime <- metadata_df[,pseudo]
   } else {
     if (!is.data.frame(pseudo)) {
       stop("pseudo must be a data.frame.")
