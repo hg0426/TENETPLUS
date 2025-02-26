@@ -11,7 +11,9 @@ SeuratToTENET(
   DAR = list(),
   TF_list = list(),
   pseudotime = "pseudotime",
-  cell_select = "cell_select"
+  cell_select = "cell_select",
+  layer = "counts",
+  ident = "orig.ident"
 )
 }
 \arguments{
