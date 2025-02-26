@@ -66,6 +66,7 @@ SeuratToTENET <- function(seurat_obj,
   new_meta <- meta
   new_meta$pseudotime <- ext_pseudo$pseudotime
   new_meta$cell_select <- ext_cell_select$select
+  new_meta$select <- ext_cell_select$select
   new_meta$Species <- Species
   
   new_meta <- new_meta[order(new_meta$pseudotime, na.last = TRUE), , drop = FALSE]
