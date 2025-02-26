@@ -58,8 +58,8 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     metadata_df$Species <- Species
   }
   
-  meta_rna <- metadata_df[metadata_df$ident == "RNA", ]
-  meta_atac <- metadata_df[metadata_df$ident == "ATAC", ]
+  meta_rna <- metadata_df[metadata_df[[ident]] == "RNA", ]
+  meta_atac <- metadata_df[metadata_df[[ident]] == "ATAC", ]
   rna_order_cells <- rownames(meta_rna)
   atac_order_cells <- rownames(meta_atac)
 
