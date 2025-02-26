@@ -1,30 +1,10 @@
-#' Create a TENET Object
-#'
-#' Constructs a TENET object from RNA counts, optional ATAC counts, pseudotime,
-#' cell selection, and other metadata. If atac_counts is missing, an empty matrix
-#' is used. Additionally, the function reorders the count matrices based on the
-#' pseudotime order in the metadata.
-#'
-#' @param rna_counts A matrix or dgCMatrix of RNA counts.
-#' @param atac_counts Optional. A matrix or dgCMatrix of ATAC counts. If NULL, an empty matrix is used.
-#' @param pseudo A data frame containing pseudotime values.
-#' @param cell_select A data frame indicating cell selection.
-#' @param processedData Optional processed data.
-#' @param DEG A data frame or list for DEG information.
-#' @param DAR A data frame or list for DAR information.
-#' @param TF_list A data frame or list for TF_list information.
-#' @param feature_list Optional feature list combining DEG, DAR, and TF_list.
-#' @param Species A character string indicating the species.
-#' @param metadata Optional metadata data frame. If NULL, it is constructed from pseudo and cell_select.
-#'
-#' @return A TENET object.
-#' @export
 CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
                         processedData = NULL,
                         DEG = list(), DAR = list(), TF_list = list(),
                         feature_list = NULL,
                         Species,
-                        metadata = NULL) {
+                        metadata = NULL,
+                        ident = "orig.ident") {
   if (is.null(atac_counts)) {
     atac_counts <- matrix(0, nrow = 0, ncol = ncol(rna_counts))
     if (!is.null(colnames(rna_counts))) {
@@ -57,6 +37,10 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     if (is.null(rownames(pseudo))) {
       stop("pseudo must have row names corresponding to cell names.")
     }
+    pseudo <- as.data.frame(pseudo)
+    rownames(pseudo) <- rownames(metadata_df)
+    pseudo <- pseudo[colnames(rna_counts), , drop = FALSE]
+    
     pseudo <- pseudo[order(pseudo$pseudotime), , drop = FALSE]
     order_cells <- rownames(pseudo)
     
@@ -74,9 +58,13 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     metadata_df$Species <- Species
   }
   
-  order_cells <- rownames(metadata_df)
-  rna_counts <- rna_counts[, order_cells, drop = FALSE]
-  atac_counts <- atac_counts[, order_cells, drop = FALSE]
+  meta_rna <- metadata_df[metadata_df$ident == "RNA", ]
+  meta_atac <- metadata_df[metadata_df$ident == "ATAC", ]
+  rna_order_cells <- rownames(meta_rna)
+  atac_order_cells <- rownames(meta_atac)
+
+  rna_counts <- rna_counts[, rna_order_cells, drop = FALSE]
+  atac_counts <- atac_counts[, atac_order_cells, drop = FALSE]
   
   if (is.data.frame(DEG)) {
     if (ncol(DEG) > 1) {
