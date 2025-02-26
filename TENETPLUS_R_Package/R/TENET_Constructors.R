@@ -38,7 +38,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
       stop("pseudo must have row names corresponding to cell names.")
     }
     pseudo <- as.data.frame(pseudo)
-    rownames(pseudo) <- rownames(metadata_df)
+    rownames(pseudo) <- rownames(pseudo)
     pseudo <- pseudo[colnames(rna_counts), , drop = FALSE]
     
     pseudo <- pseudo[order(pseudo$pseudotime), , drop = FALSE]
