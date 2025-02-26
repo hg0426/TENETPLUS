@@ -42,8 +42,12 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
   
   if (!is.null(metadata)) {
     metadata_df <- metadata
+    if (!is.data.frame(cell_select)){
     metadata_df$select <- metadata_df[[cell_select]]
+      }
+    if (!is.data.frame(pseudo)){
     metadata_df$pseudotime <- metadata_df[[pseudo]]
+      }
     metadata_df$Species <- Species
     if (ident!="None"){
       meta_rna <- metadata_df[metadata_df[["orig.ident"]] == "RNA", ]
