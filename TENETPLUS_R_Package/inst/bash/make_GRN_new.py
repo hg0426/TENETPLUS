@@ -11,8 +11,8 @@ lines_target = ifile.read().split("\n")
 temp = line.split()
 target_name=[]
 source_name=[]
-print(len(lines_target))
-print(len(temp))
+#print(len(lines_target))
+#print(len(temp))
 for i in range(len(temp)-1):
     target_name.append(temp[i+1])
 
@@ -26,8 +26,8 @@ TEnetwork=[]
 source=[]
 TE=[]
 target=[]
-print(len(source_name))
-print(len(target_name))
+#print(len(source_name))
+#print(len(target_name))
 
 file_name=sys.argv[1]
 
