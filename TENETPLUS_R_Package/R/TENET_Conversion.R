@@ -17,7 +17,8 @@ SeuratToTENET <- function(seurat_obj,
                           DEG = list(), DAR = list(), TF_list = list(),
                           pseudotime = "pseudotime",
                           cell_select = "cell_select",
-                         layer = "counts") {
+                         layer = "counts",
+                         ident = "orig.ident") {
   if (!("RNA" %in% names(seurat_obj@assays))) {
     stop("Seurat object does not have an RNA assay.")
   }
@@ -68,10 +69,15 @@ SeuratToTENET <- function(seurat_obj,
   new_meta$Species <- Species
   
   new_meta <- new_meta[order(new_meta$pseudotime, na.last = TRUE), , drop = FALSE]
-  order_cells <- rownames(new_meta)
   
-  rna_counts <- rna_counts[, order_cells, drop = FALSE]
-  atac_counts <- atac_counts[, order_cells, drop = FALSE]
+  meta_rna <- new_meta[new_meta$orig.ident == "RNA", ]
+  meta_atac <- new_meta[new_meta$orig.ident == "ATAC", ]
+  rna_order_cells <- rownames(meta_rna)
+  atac_order_cells <- rownames(meta_atac)
+  
+ 
+  rna_counts <- rna_counts[, rna_order_cells, drop = FALSE]
+  atac_counts <- atac_counts[, atac_order_cells, drop = FALSE]
   
   metadata_df <- new_meta
   
