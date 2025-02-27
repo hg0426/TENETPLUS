@@ -17,8 +17,8 @@ SeuratToTENET <- function(seurat_obj,
                           DEG = list(), DAR = list(), TF_list = list(),
                           pseudotime = "pseudotime",
                           cell_select = "cell_select",
-                         layer = "counts",
-                         ident = "orig.ident") {
+                          layer = "counts",
+                          ident = "orig.ident") {
   if (!("RNA" %in% names(seurat_obj@assays))) {
     stop("Seurat object does not have an RNA assay.")
   }
@@ -31,6 +31,7 @@ SeuratToTENET <- function(seurat_obj,
     colnames(atac_counts) <- colnames(rna_counts)
   }
   meta <- seurat_obj@meta.data
+  meta <- meta[colnames(rna_counts), , drop = FALSE]
   cells <- rownames(meta)
   
   if (is.data.frame(pseudotime)) {
@@ -71,17 +72,20 @@ SeuratToTENET <- function(seurat_obj,
   
   new_meta <- new_meta[order(new_meta$pseudotime, na.last = TRUE), , drop = FALSE]
   
+  meta_temp <- seurat_obj@meta.data
+  meta_atac <- meta_temp[meta_temp$orig.ident == "ATAC", ]
+  meta_atac$pseudotime <- ext_pseudo$pseudotime
+  
   meta_rna <- new_meta[new_meta$orig.ident == "RNA", ]
-  meta_atac <- new_meta[new_meta$orig.ident == "ATAC", ]
   rna_order_cells <- rownames(meta_rna)
   atac_order_cells <- rownames(meta_atac)
   
- 
+  metadata_df <- new_meta
+  
   rna_counts <- rna_counts[, rna_order_cells, drop = FALSE]
   atac_counts <- atac_counts[, atac_order_cells, drop = FALSE]
+  colnames(atac_counts) <- colnames(rna_counts)
   
-  metadata_df <- new_meta
-  metadata_df <- metadata_df[colnames(rna_counts), , drop = FALSE]
   tenet_obj <- CreateTENET(
     rna_counts = rna_counts,
     atac_counts = atac_counts,
