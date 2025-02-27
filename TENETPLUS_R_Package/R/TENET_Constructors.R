@@ -120,8 +120,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
   }
   if (identical(DEG, list())){
     warning("No specific DEG was provided, so all genes have been selected.")
-    DEG <- as.data.frame(rownames(rna_counts))
-    colnames(DEG) <- "DEG"
+    DEG <- as.character(rownames(rna_counts))
     }
   if (is.data.frame(DAR)) {
     if (ncol(DAR) > 1) {
@@ -132,8 +131,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
   }
   if (identical(DAR, list())){
     warning("No specific DAR was provided, so all features have been selected.")
-    DAR <- as.data.frame(rownames(atac_counts))
-    colnames(DAR) <- "DAR"
+    DAR <- as.character(rownames(atac_counts))
     }
   if (is.data.frame(TF_list)) {
     if (ncol(TF_list) > 1) {
