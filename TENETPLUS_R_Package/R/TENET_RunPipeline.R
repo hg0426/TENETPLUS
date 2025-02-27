@@ -188,9 +188,9 @@ runTENETPlus <- function(obj,
   #################################
   # 7) Construct the command with working directory set to outdir
   #################################
-  # For Linux, add 'stdbuf -oL' to force line buffering so that output is displayed in real-time.
+  # Added "2>&1" at the end to redirect stderr to stdout
   cmd <- sprintf(
-    "cd %s && stdbuf -oL ./%s %s %d %s %s %d %s %d 2>&1",
+    "cd %s && ./%s %s %d %s %s %d %s %d 2>&1",
     shQuote(normalizePath(outdir)),
     shQuote(basename(bashFile_new)),
     shQuote(normalizePath(matrix_csv_file)),
@@ -204,10 +204,16 @@ runTENETPlus <- function(obj,
   message("Running TENET+ command:\n", cmd)
 
   #################################
-  # 8) Run system command and display output in real-time
+  # 8) Run system command and capture output
   #################################
-  # Using intern = FALSE streams the output directly to the console in real-time.
-  exit_code <- system(cmd, intern = FALSE)
+  # Use intern = TRUE to capture both stdout and stderr, then print the result.
+  output <- system(cmd, intern = TRUE)
+  cat(output, sep = "\n")
+  # Retrieve exit code (if available)
+  exit_code <- attr(output, "status")
+  if (is.null(exit_code)) {
+    exit_code <- 0
+  }
   message("TENET+ exit code: ", exit_code)
 
   #################################
