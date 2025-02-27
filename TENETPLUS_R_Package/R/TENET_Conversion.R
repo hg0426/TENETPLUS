@@ -81,7 +81,7 @@ SeuratToTENET <- function(seurat_obj,
   atac_counts <- atac_counts[, atac_order_cells, drop = FALSE]
   
   metadata_df <- new_meta
-  
+  metadata_df <- metadata_df[colnames(rna_counts), , drop = FALSE]
   tenet_obj <- CreateTENET(
     rna_counts = rna_counts,
     atac_counts = atac_counts,
