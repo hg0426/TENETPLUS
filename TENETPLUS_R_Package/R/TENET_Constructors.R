@@ -118,7 +118,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     }
     colnames(DEG) <- "DEG"
   }
-  if (identical(DEG, list()){
+  if (identical(DEG, list())){
     warning("No specific DEG was provided, so all genes have been selected.")
     DEG <- as.data.frame(rownames(rna_counts))
     colnames(DEG) <- "DEG"
@@ -130,7 +130,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     }
     colnames(DAR) <- "DAR"
   }
-  if (identical(DAR, list()){
+  if (identical(DAR, list())){
     warning("No specific DAR was provided, so all genes have been selected.")
     DAR <- as.data.frame(rownames(atac_counts))
     colnames(DAR) <- "DAR"
