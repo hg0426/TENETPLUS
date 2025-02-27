@@ -24,7 +24,7 @@ SeuratToTENET <- function(seurat_obj,
   }
   rna_counts <- GetAssayData(seurat_obj, assay = "RNA", layer = layer)
   if ("ATAC" %in% names(seurat_obj@assays)) {
-    atac_counts <- GetAssayData(seurat_obj, assay = "ATAC", layer = layer)
+    atac_counts <- GetAssayData(seurat_obj, assay = "peaks", layer = layer)
   } else {
     warning("Seurat object does not have an ATAC assay; using an empty matrix.")
     atac_counts <- matrix(0, nrow = 0, ncol = ncol(rna_counts))
