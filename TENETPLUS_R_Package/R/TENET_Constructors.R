@@ -51,11 +51,11 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     metadata_df$Species <- Species
     if (ident!="None"){
       meta_rna <- metadata_df[metadata_df[["orig.ident"]] == "RNA", ]
-      meta_atac <- metadata_df[metadata_df[["orig.ident"]] == "ATAC", ]
+      #meta_atac <- metadata_df[metadata_df[["orig.ident"]] == "ATAC", ]
       rna_order_cells <- rownames(meta_rna)
-      atac_order_cells <- rownames(meta_atac)
+      #atac_order_cells <- rownames(meta_atac)
       rna_counts <- rna_counts[,rna_order_cells, drop = FALSE]
-      atac_counts <- atac_counts[,atac_order_cells, drop = FALSE]
+      atac_counts <- atac_counts[,rna_order_cells, drop = FALSE]
     } else{
       print("To use metadata seqence ident is requred")
       #metadata_df <- metadata_df[colnames(rna_counts), , drop = FALSE]
