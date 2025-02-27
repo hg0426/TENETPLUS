@@ -131,7 +131,7 @@ CreateTENET <- function(rna_counts, atac_counts = NULL, pseudo, cell_select,
     colnames(DAR) <- "DAR"
   }
   if (identical(DAR, list())){
-    warning("No specific DAR was provided, so all genes have been selected.")
+    warning("No specific DAR was provided, so all features have been selected.")
     DAR <- as.data.frame(rownames(atac_counts))
     colnames(DAR) <- "DAR"
     }
