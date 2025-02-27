@@ -162,8 +162,8 @@ PseudoHeatmap <- function(object,
       length(targets)
       
       ### Tmp code
-      targets <- targets[targets %in% rownames(object@input$count$rna_counts)]
-      targets <- "FOXO1"
+      # targets <- targets[targets %in% rownames(object@input$count$rna_counts)]
+      # targets <- "FOXO1"
       
       count_matrix_sub <- count_matrix[,c("pseudo_idx",targets)]
       
