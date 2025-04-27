@@ -8,7 +8,7 @@ A tool for reconstructing Transfer Entropy-based causal gene NETwork from pseudo
 <div>
 
 
-![tenetplus_workflow](https://github.com/hg0426/TENETPLUS/assets/61915842/2d2364fe-9bee-4045-9c25-7dad4f2f5b48)
+![tenetplus_workflow](https://github.com/user-attachments/assets/36e6c47a-4f12-4a6a-a74e-1da6eea6ab32)
 
 
 </div>
