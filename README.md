@@ -2,6 +2,15 @@
 
 TENETPLUS reconstructs Transfer Entropy (TE)-based causal gene networks from pseudotime-ordered single-cell transcriptomic and epigenetic data, with an emphasis on RNA + ATAC multiome assays (the non-multiome TENET_TF mode is still supported).
 
+## Method
+
+![tenetplus_workflow](https://github.com/user-attachments/assets/36e6c47a-4f12-4a6a-a74e-1da6eea6ab32)
+
+## Citation
+
+Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014  
+https://github.com/neocaleb/TENET
+
 ## Highlights
 - **Multiome-aware pipeline**: integrates TF->gene, TF->peak, and peak->gene signals while keeping the original TENET_TF flow available.
 - **Modern interface**: `TENET_Plus_for_py.sh` uses interactive prompts but also accepts a full CLI to keep batch workflows reproducible.
@@ -105,7 +114,3 @@ python code/countOutdegree.py TE_result_matrix_rowTF_colGN.fdr0.01.trimIndirect-
 
 Each run writes `<network>.outdegree.txt`.
 
-## Citation
-
-Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014  
-https://github.com/neocaleb/TENET
