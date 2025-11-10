@@ -4,7 +4,7 @@ TENETPLUS reconstructs Transfer Entropy (TE)-based causal gene networks from pse
 
 ## Method
 
-![tenetplus_workflow](https://github.com/user-attachments/assets/36e6c47a-4f12-4a6a-a74e-1da6eea6ab32)
+![tenetplus_workflow](https://github.com/user-attachments/assets/41214b68-41d4-4b8a-9a97-fc7e780efe0e)
 
 ## Citation
 
