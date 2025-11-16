@@ -61,6 +61,7 @@ CKD_WORKERS = int(os.getenv("CKD_WORKERS", "1"))
 STORE_LOCAL_TE = False
 LOCAL_TE_DTYPE = np.float16
 LOCAL_TE_DTYPE_STR = 'float16'
+LOCAL_TE_CODEC = os.getenv('TE_LOCALTE_CODEC', 'zlib').lower()
 DENSE_THRESHOLD = int(os.getenv("TE_DENSE_THRESHOLD", "250"))
 DISC_BINS = 6
 DISC_BIAS = 'miller'
@@ -174,6 +175,8 @@ def _get_dest_ctx_kernel(target_idx: int, historyLength: int, kernel_width: floa
     _DEST_CTX_CACHE_KERNEL[key] = ctx
     return ctx
 
+_LINEAR_CACHE_MAX = int(os.getenv("DEST_CTX_CACHE_LINEAR_MAX", "64"))
+
 def _get_dest_ctx_linear(target_idx: int, historyLength: int):
     key = (target_idx, historyLength)
     ctx = _DEST_CTX_CACHE_LINEAR.get(key)
@@ -182,7 +185,7 @@ def _get_dest_ctx_linear(target_idx: int, historyLength: int):
     dest = GLOBAL_CELL_GENE[target_idx - 1].toarray().ravel().astype(np.float64, copy=False)
     dest = _maybe_subsample(dest)
     ctx = prepare_dest_context_linear(dest, k=historyLength)
-    if len(_DEST_CTX_CACHE_LINEAR) > 256:
+    if len(_DEST_CTX_CACHE_LINEAR) > _LINEAR_CACHE_MAX:
         _DEST_CTX_CACHE_LINEAR.clear()
     _DEST_CTX_CACHE_LINEAR[key] = ctx
     return ctx
@@ -266,9 +269,23 @@ def _get_dest_ctx_kgrid(target_idx: int, historyLength: int, kernel_width: float
     return ctx
 
 
-def _encode_local_te(local_array) -> tuple[bytes, int, str]:
+def _encode_local_te(local_array) -> tuple[bytes, int, str, str]:
+    """Encode LocalTE array to bytes with optional compression.
+    Returns (bytes, length, dtype_str, codec).
+    """
     arr = np.asarray(local_array, dtype=LOCAL_TE_DTYPE, order='C')
-    return arr.tobytes(), int(arr.size), LOCAL_TE_DTYPE_STR
+    raw = arr.tobytes()
+    codec = LOCAL_TE_CODEC if LOCAL_TE_CODEC in ('zlib', 'none') else 'zlib'
+    if codec == 'zlib':
+        try:
+            import zlib as _z
+            level = int(os.getenv('TE_LOCALTE_ZLIB_LEVEL', '3'))
+            comp = _z.compress(raw, level=level)
+            return comp, int(arr.size), LOCAL_TE_DTYPE_STR, 'zlib'
+        except Exception:
+            # Fallback to raw bytes on any compression error
+            return raw, int(arr.size), LOCAL_TE_DTYPE_STR, 'none'
+    return raw, int(arr.size), LOCAL_TE_DTYPE_STR, 'none'
 
 def _process_chunk(args):
     """Worker: compute TE for a single target and a chunk of its sources."""
@@ -415,8 +432,8 @@ def _process_chunk(args):
             local_vals = None
     if STORE_LOCAL_TE:
         for sidx, te, local in zip(valid_sources, te_vals, local_vals):
-            local_bytes, local_len, local_dtype = _encode_local_te(local)
-            results.append((sidx, target_idx, te, local_bytes, local_len, local_dtype))
+            local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local)
+            results.append((sidx, target_idx, te, local_bytes, local_len, local_dtype, local_codec))
     else:
         for sidx, te in zip(valid_sources, te_vals):
             results.append((sidx, target_idx, te))
@@ -451,8 +468,8 @@ def _perm_worker_linear(args_w):
                     seed=int(base_seed) + int(s),
                     return_local=True,
                 )
-                local_bytes, local_len, local_dtype = _encode_local_te(local)
-                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype))
+                local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local)
+                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype, local_codec))
             else:
                 te, p = linear_te_permutation_pvalue(
                     ctx,
@@ -494,18 +511,18 @@ def _kernel_te_perm_pvalue(
     if te_vals:
         te_orig = float(te_vals[0])
         if store_local:
-            local_bytes, local_len, local_dtype = _encode_local_te(local_vals[0])
+            local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local_vals[0])
         else:
-            local_bytes = local_len = local_dtype = None
+            local_bytes = local_len = local_dtype = local_codec = None
     else:
         te_orig = 0.0
         if store_local:
-            local_bytes, local_len, local_dtype = b'', 0, LOCAL_TE_DTYPE_STR
+            local_bytes, local_len, local_dtype, local_codec = b'', 0, LOCAL_TE_DTYPE_STR, 'none'
         else:
-            local_bytes = local_len = local_dtype = None
+            local_bytes = local_len = local_dtype = local_codec = None
     if num_perms <= 0:
         if store_local:
-            return te_orig, 1.0, local_bytes, local_len, local_dtype
+            return te_orig, 1.0, local_bytes, local_len, local_dtype, local_codec
         return te_orig, 1.0
     rng = np.random.default_rng(int(seed))
     s = np.asarray(series, dtype=np.float64).copy()
@@ -527,7 +544,7 @@ def _kernel_te_perm_pvalue(
             count += 1
     pval = (count + 1.0) / (num_perms + 1.0)
     if store_local:
-        return te_orig, float(pval), local_bytes, local_len, local_dtype
+        return te_orig, float(pval), local_bytes, local_len, local_dtype, local_codec
     return te_orig, float(pval)
 
 
@@ -558,8 +575,8 @@ def _perm_worker_poly(args_w):
                     seed=int(base_seed) + int(s),
                     return_local=True,
                 )
-                local_bytes, local_len, local_dtype = _encode_local_te(local)
-                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype))
+                local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local)
+                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype, local_codec))
             else:
                 te, p = poly_te_permutation_pvalue(
                     ctx,
@@ -592,7 +609,7 @@ def _perm_worker_kernel(args_w):
             series = GLOBAL_CELL_GENE[s - 1].toarray().ravel().astype(np.float64, copy=False)
             series = _maybe_subsample(series)
             if STORE_LOCAL_TE:
-                te, p, local_bytes, local_len, local_dtype = _kernel_te_perm_pvalue(
+                te, p, local_bytes, local_len, local_dtype, local_codec = _kernel_te_perm_pvalue(
                     ctx,
                     series,
                     k_hist,
@@ -600,7 +617,7 @@ def _perm_worker_kernel(args_w):
                     seed=int(base_seed) + int(s),
                     store_local=True,
                 )
-                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype))
+                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype, local_codec))
             else:
                 te, p = _kernel_te_perm_pvalue(
                     ctx,
@@ -645,8 +662,8 @@ def _perm_worker_ksg(args_w):
                     seed=int(base_seed) + int(s),
                     return_local=True,
                 )
-                local_bytes, local_len, local_dtype = _encode_local_te(local)
-                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype))
+                local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local)
+                res.append((s, tgt, te, p, local_bytes, local_len, local_dtype, local_codec))
             else:
                 te, p = ksg_te_permutation_pvalue(
                     ctx,
@@ -684,8 +701,8 @@ def _kgrid_te_perm_pvalue(dest_ctx: dict, series: np.ndarray, k_hist: int, num_p
         perms += 1
     pval = (ge + 1.0) / (perms + 1.0)
     if store_local:
-        b, n, dt = _encode_local_te(local_vals[0])
-        return te, pval, b, n, dt
+        b, n, dt, cc = _encode_local_te(local_vals[0])
+        return te, pval, b, n, dt, cc
     return te, pval
 
 
@@ -705,8 +722,8 @@ def _perm_worker_kgrid(args_w):
             series = GLOBAL_CELL_GENE[s - 1].toarray().ravel().astype(np.float64, copy=False)
             series = _maybe_subsample(series)
             if STORE_LOCAL_TE:
-                te, p, b, n, dt = _kgrid_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
-                res.append((s, tgt, te, p, b, n, dt))
+                te, p, b, n, dt, cc = _kgrid_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
+                res.append((s, tgt, te, p, b, n, dt, cc))
             else:
                 te, p = _kgrid_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=False)
                 res.append((s, tgt, te, p))
@@ -739,8 +756,8 @@ def _gcmi_te_perm_pvalue(dest_ctx: dict, series: np.ndarray, k_hist: int, num_pe
     pval = (ge + 1.0) / (perms + 1.0)
     if store_local:
         loc = local_vals[0]
-        b, n, dt = _encode_local_te(loc)
-        return te, pval, b, n, dt
+        b, n, dt, cc = _encode_local_te(loc)
+        return te, pval, b, n, dt, cc
     return te, pval
 
 
@@ -760,8 +777,8 @@ def _perm_worker_gcmi(args_w):
             series = GLOBAL_CELL_GENE[s - 1].toarray().ravel().astype(np.float64, copy=False)
             series = _maybe_subsample(series)
             if STORE_LOCAL_TE:
-                te, p, b, n, dt = _gcmi_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
-                res.append((s, tgt, te, p, b, n, dt))
+                te, p, b, n, dt, cc = _gcmi_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
+                res.append((s, tgt, te, p, b, n, dt, cc))
             else:
                 te, p = _gcmi_te_perm_pvalue(ctx, series, k_hist, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=False)
                 res.append((s, tgt, te, p))
@@ -789,8 +806,8 @@ def _disc_te_perm_pvalue(ctx: dict, x_codes: np.ndarray, nstates_z: int, nstates
         perms += 1
     pval = (ge + 1.0) / (perms + 1.0)
     if store_local:
-        b, n, dt = _encode_local_te(loc)
-        return te, pval, b, n, dt
+        b, n, dt, cc = _encode_local_te(loc)
+        return te, pval, b, n, dt, cc
     return te, pval
 
 
@@ -814,8 +831,8 @@ def _perm_worker_disc(args_w):
             from .te_discrete import discretize_quantile
             x_codes = discretize_quantile(x, int(nbins)).astype(np.int32)
             if STORE_LOCAL_TE:
-                te, p, b, n, dt = _disc_te_perm_pvalue(ctx, x_codes, nstates_z, int(nbins), nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
-                res.append((s, tgt, te, p, b, n, dt))
+                te, p, b, n, dt, cc = _disc_te_perm_pvalue(ctx, x_codes, nstates_z, int(nbins), nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
+                res.append((s, tgt, te, p, b, n, dt, cc))
             else:
                 te, p = _disc_te_perm_pvalue(ctx, x_codes, nstates_z, int(nbins), nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=False)
                 res.append((s, tgt, te, p))
@@ -843,8 +860,8 @@ def _ordinal_te_perm_pvalue(ctx: dict, x_codes: np.ndarray, nstates_z: int, nsta
         perms += 1
     pval = (ge + 1.0) / (perms + 1.0)
     if store_local:
-        b, n, dt = _encode_local_te(loc)
-        return te, pval, b, n, dt
+        b, n, dt, cc = _encode_local_te(loc)
+        return te, pval, b, n, dt, cc
     return te, pval
 
 
@@ -878,8 +895,8 @@ def _perm_worker_ordinal(args_w):
             x_codes = ordinal_lehmer_codes(win)
             nstates_x = int(np.math.factorial(int(ord_kx)))
             if STORE_LOCAL_TE:
-                te, p, b, n, dt = _ordinal_te_perm_pvalue(ctx, x_codes, nstates_z, nstates_x, nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
-                res.append((s, tgt, te, p, b, n, dt))
+                te, p, b, n, dt, cc = _ordinal_te_perm_pvalue(ctx, x_codes, nstates_z, nstates_x, nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=True)
+                res.append((s, tgt, te, p, b, n, dt, cc))
             else:
                 te, p = _ordinal_te_perm_pvalue(ctx, x_codes, nstates_z, nstates_x, nstates_y, num_perms=int(perm_n), seed=int(base_seed) + int(s), store_local=False)
                 res.append((s, tgt, te, p))
@@ -1048,6 +1065,95 @@ def consolidate_merged_results(progress_dir, output_path, delete_after=False):
                 logging.error(f"Error deleting merged file {filepath}: {e}")
     return True
 
+
+def select_refine_pairs_duckdb(fast_path: str, topk: int = 0, top_pct: float = 0.0):
+    """Select refine pairs from a parquet file using DuckDB without loading the full table into RAM.
+    Returns numpy ndarray of shape (N,2) with columns [Source, Target]."""
+    con = duckdb.connect()
+    try:
+        if topk and topk > 0:
+            q = f"""
+                SELECT Source, Target FROM (
+                  SELECT Source, Target, TE,
+                         ROW_NUMBER() OVER (PARTITION BY Target ORDER BY TE DESC) AS rn
+                  FROM read_parquet('{fast_path}')
+                ) WHERE rn <= {int(topk)}
+            """
+            df = con.execute(q).fetchdf()
+            return df[['Source', 'Target']].to_numpy(dtype=int)
+        elif top_pct and top_pct > 0.0:
+            p = max(min(float(top_pct), 100.0), 0.0) / 100.0
+            try:
+                q_th = con.execute(f"SELECT quantile_cont(TE, {p}) AS q FROM read_parquet('{fast_path}')").fetchone()[0]
+            except Exception:
+                q_th = con.execute(f"SELECT approx_quantile(TE, {p}) AS q FROM read_parquet('{fast_path}')").fetchone()[0]
+            df = con.execute(f"SELECT Source, Target FROM read_parquet('{fast_path}') WHERE TE >= {q_th}").fetchdf()
+            return df[['Source', 'Target']].to_numpy(dtype=int)
+        else:
+            df = con.execute(f"SELECT Source, Target FROM read_parquet('{fast_path}')").fetchdf()
+            return df[['Source', 'Target']].to_numpy(dtype=int)
+    finally:
+        con.close()
+
+
+def copy_parquet_duckdb(in_path: str, out_path: str):
+    con = duckdb.connect()
+    try:
+        con.execute(f"COPY (SELECT * FROM read_parquet('{in_path}')) TO '{out_path}' (FORMAT PARQUET)")
+    finally:
+        con.close()
+
+
+def _duckdb_cast_for_col(col_name: str) -> str:
+    name = col_name.lower()
+    if 'bytes' in name:
+        return 'BLOB'
+    if 'len' in name:
+        return 'INTEGER'
+    return 'VARCHAR'
+
+
+def merge_fast_and_refined_duckdb(fast_path: str, refined_path: str, out_path: str):
+    """Merge refined scores into fast results on disk with DuckDB.
+    Coalesces TE and LocalTE_* columns without loading full tables into pandas.
+    """
+    con = duckdb.connect()
+    try:
+        fast_cols = list(con.execute(f"SELECT * FROM read_parquet('{fast_path}') LIMIT 0").fetchdf().columns)
+        ref_cols = list(con.execute(f"SELECT * FROM read_parquet('{refined_path}') LIMIT 0").fetchdf().columns)
+        local_cols_all = [c for c in ('LocalTE_bytes','LocalTE_len','LocalTE_dtype','LocalTE_codec') if c in set(fast_cols) | set(ref_cols)]
+
+        def select_with_alias(path: str, cols: list[str], prefix: str | None = None):
+            sels = ["Source", "Target", ("TE AS TE_r" if prefix == 'r' else "TE")]
+            for c in local_cols_all:
+                if c in cols:
+                    if prefix == 'r':
+                        sels.append(f"{c} AS {c}_r")
+                    else:
+                        sels.append(c)
+                else:
+                    cast_t = _duckdb_cast_for_col(c)
+                    if prefix == 'r':
+                        sels.append(f"CAST(NULL AS {cast_t}) AS {c}_r")
+                    else:
+                        sels.append(f"CAST(NULL AS {cast_t}) AS {c}")
+            return f"SELECT {', '.join(sels)} FROM read_parquet('{path}')"
+
+        fast_sub = select_with_alias(fast_path, fast_cols, prefix=None)
+        ref_sub = select_with_alias(refined_path, ref_cols, prefix='r')
+
+        assigns = ["COALESCE(r.TE_r, f.TE) AS TE"]
+        for c in local_cols_all:
+            assigns.append(f"COALESCE(r.{c}_r, f.{c}) AS {c}")
+        sql = f"""
+            WITH f AS ({fast_sub}), r AS ({ref_sub})
+            SELECT f.Source, f.Target, {', '.join(assigns)}
+            FROM f LEFT JOIN r ON (f.Source=r.Source AND f.Target=r.Target)
+        """
+        con.execute(f"COPY ({sql}) TO '{out_path}' (FORMAT PARQUET)")
+    finally:
+        con.close()
+
 def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width, num_cpus, batch_size, progress_dir, buffer_size=100000, merge_threshold=50, enable_intermediate_save=True, mode='linear', output_file='TE_result_all.parquet'):
     """
     Processes the list of pairs in batches using multiprocessing Pool.
@@ -1095,7 +1201,7 @@ def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width,
                 batch_records = []
                 for row in batch_result:
                     if STORE_LOCAL_TE:
-                        source, target, te_value, local_bytes, local_len, local_dtype = row
+                        source, target, te_value, local_bytes, local_len, local_dtype, local_codec = row
                         record = {
                             'Source': source,
                             'Target': target,
@@ -1103,6 +1209,7 @@ def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width,
                             'LocalTE_bytes': local_bytes,
                             'LocalTE_len': local_len,
                             'LocalTE_dtype': local_dtype,
+                            'LocalTE_codec': local_codec,
                         }
                     else:
                         source, target, te_value = row
@@ -1298,6 +1405,20 @@ def main(args):
     STORE_LOCAL_TE = bool(getattr(args, 'store_local_te', False))
     if STORE_LOCAL_TE:
         logging.info("Local TE storage enabled; outputs will include LocalTE arrays.")
+    # Configure LocalTE codec
+    global LOCAL_TE_CODEC
+    try:
+        LOCAL_TE_CODEC = str(getattr(args, 'localte_codec', LOCAL_TE_CODEC or 'zlib')).lower()
+    except Exception:
+        LOCAL_TE_CODEC = os.getenv('TE_LOCALTE_CODEC', 'zlib').lower()
+    # Optional profiling for linear TE memory
+    try:
+        prof_lin = bool(getattr(args, 'profile_linear_mem', False))
+    except Exception:
+        prof_lin = False
+    if prof_lin and getattr(args, 'mode', 'linear') == 'linear':
+        os.environ['TE_LINEAR_PROFILE'] = '1'
+        logging.info("TE_LINEAR_PROFILE enabled (env set) for detailed memory tracing.")
 
     # Optional: build global timepoint subsample indices
     global TIME_SUBSAMPLE_INDICES
@@ -1470,29 +1591,21 @@ def main(args):
 
     # Optional hybrid refinement: re-score a subset with kernel/KSG and replace
     if refine_requested:
+        # Determine subset to refine using DuckDB to avoid full in-RAM DataFrame
         try:
-            df_fast = pd.read_parquet(fast_output)
+            refine_pairs = select_refine_pairs_duckdb(
+                fast_output,
+                int(args.hybrid_refine_topk_per_target) if args.hybrid_refine_topk_per_target else 0,
+                float(args.hybrid_refine_top_pct) if args.hybrid_refine_top_pct else 0.0,
+            )
         except Exception as e:
-            logging.error(f"Failed to load fast output {fast_output}: {e}")
+            logging.error(f"Failed to select refine pairs via DuckDB: {e}")
             return
-
-        # Determine subset to refine
-        refine_pairs = None
-        if args.hybrid_refine_topk_per_target and args.hybrid_refine_topk_per_target > 0:
-            k = int(args.hybrid_refine_topk_per_target)
-            df_fast_sorted = df_fast.sort_values(['Target', 'TE'], ascending=[True, False])
-            refine_subset = df_fast_sorted.groupby('Target', as_index=False).head(k)
-            refine_pairs = refine_subset[['Source', 'Target']].to_numpy(dtype=int)
-        elif args.hybrid_refine_top_pct and args.hybrid_refine_top_pct > 0.0:
-            pct = float(args.hybrid_refine_top_pct)
-            thresh = df_fast['TE'].quantile(max(min(pct, 100.0), 0.0) / 100.0)
-            refine_subset = df_fast[df_fast['TE'] >= thresh]
-            refine_pairs = refine_subset[['Source', 'Target']].to_numpy(dtype=int)
 
         if refine_pairs is None or len(refine_pairs) == 0:
             logging.info("No pairs selected for kernel refinement. Writing fast results as final output.")
             try:
-                df_fast.to_parquet(args.hybrid_output, index=False)
+                copy_parquet_duckdb(fast_output, args.hybrid_output)
             except Exception as e:
                 logging.error(f"Failed to write final output {args.hybrid_output}: {e}")
             return
@@ -1513,45 +1626,18 @@ def main(args):
             progress_dir=refine_progress_dir,
             buffer_size=buffer_size,
             merge_threshold=merge_threshold,
-            enable_intermediate_save=False,
+            enable_intermediate_save=True,
             mode=('ksg' if method == 'ksg' else 'kernel'),
             output_file=out_name,
         )
 
+        # Merge fast + refined using DuckDB to keep memory flat
         try:
-            df_refined = pd.read_parquet(out_name)
-        except Exception as e:
-            logging.error(f"Failed to load refined {method} results: {e}")
-            return
-
-        # Merge: refined values override fast values where available
-        df_refined = df_refined.rename(columns={'TE': f'TE_{method}'})
-        if STORE_LOCAL_TE:
-            for col in ('LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'):
-                if col in df_refined.columns:
-                    df_refined = df_refined.rename(columns={col: f'{col}_{method}'})
-        df_final = df_fast.merge(df_refined, on=['Source', 'Target'], how='left')
-        df_final['TE'] = df_final[f'TE_{method}'].fillna(df_final['TE'])
-        if STORE_LOCAL_TE:
-            for col in ('LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'):
-                col_refined = f'{col}_{method}'
-                if col_refined in df_final.columns:
-                    mask = df_final[col_refined].notna()
-                    df_final.loc[mask, col] = df_final.loc[mask, col_refined]
-                    df_final = df_final.drop(columns=[col_refined])
-        cols = ['Source', 'Target', 'TE']
-        if STORE_LOCAL_TE:
-            for col in ('LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'):
-                if col in df_final.columns:
-                    cols.append(col)
-        df_final = df_final[cols]
-
-        try:
-            df_final.to_parquet(args.hybrid_output, index=False)
+            merge_fast_and_refined_duckdb(fast_output, out_name, args.hybrid_output)
             print(f"Final results saved to {args.hybrid_output}.")
             logging.info(f"Final results saved to {args.hybrid_output}.")
         except Exception as e:
-            logging.error(f"Failed to write final output {args.hybrid_output}: {e}")
+            logging.error(f"Failed to merge fast and refined outputs via DuckDB: {e}")
         return
 
 
@@ -1678,7 +1764,12 @@ def main(args):
             return
 
         if STORE_LOCAL_TE:
-            df_perm = pd.DataFrame(out_rows, columns=['Source', 'Target', 'TE', 'p_value', 'LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'])
+            # Include codec column when LocalTE is present
+            has_codec = any(len(r) == 8 for r in out_rows)
+            if has_codec:
+                df_perm = pd.DataFrame(out_rows, columns=['Source', 'Target', 'TE', 'p_value', 'LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype', 'LocalTE_codec'])
+            else:
+                df_perm = pd.DataFrame(out_rows, columns=['Source', 'Target', 'TE', 'p_value', 'LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'])
         else:
             df_perm = pd.DataFrame(out_rows, columns=['Source', 'Target', 'TE', 'p_value'])
         # Benjamini-Hochberg FDR (monotone, mapped back to original order)
@@ -1706,7 +1797,7 @@ def main(args):
         try:
             base_cols = ['Source', 'Target', 'TE', 'p_value']
             if STORE_LOCAL_TE:
-                for col in ('LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype'):
+                for col in ('LocalTE_bytes', 'LocalTE_len', 'LocalTE_dtype', 'LocalTE_codec'):
                     if col in df_perm.columns:
                         base_cols.append(col)
             if args.use_fdr and 'q_value' in df_perm.columns:
@@ -1778,6 +1869,9 @@ if __name__ == "__main__":
     parser.add_argument('--use_fdr', action='store_true', help="Use BH-FDR to threshold permutation results.")
     parser.add_argument('--perm_q_alpha', type=float, default=0.05, help="FDR q-value threshold when --use_fdr is set.")
     parser.add_argument('--store_local_te', action='store_true', help="Store per-timepoint local TE arrays in outputs.")
+    parser.add_argument('--localte_codec', choices=['none','zlib'], default='zlib', help="Compression for LocalTE_bytes column (default: zlib).")
+    parser.add_argument('--profile_linear_mem', action='store_true', help="Enable detailed memory tracing for linear TE (prints to stderr).")
+    parser.add_argument('--pool_maxtasks', type=int, default=None, help="Recycle worker processes after N tasks to reduce RSS growth.")
     parser.add_argument('--results_buffer_rows', type=int, default=None, help="Maximum TE rows to buffer in memory before flushing (default: 200000, or 5000 when storing local TE).")
     # Time subsampling options
     parser.add_argument('--time_stride', type=int, default=1, help="Use every N-th timepoint (applied before windowing). Overrides time_pct when >1.")

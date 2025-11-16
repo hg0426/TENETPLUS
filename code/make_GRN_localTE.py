@@ -58,11 +58,20 @@ def decode_local_matrix(df: pd.DataFrame, max_len: int) -> np.ndarray:
     bytes_col = df["LocalTE_bytes"].to_numpy()
     dtype_col = df["LocalTE_dtype"].to_numpy()
     len_col = df["LocalTE_len"].fillna(0).astype(int).to_numpy()
+    codec_col = df["LocalTE_codec"].to_numpy() if "LocalTE_codec" in df.columns else None
     for idx, blob in enumerate(bytes_col):
         length = len_col[idx]
         if length <= 0:
             continue
-        series = np.frombuffer(blob, dtype=dtype_col[idx], count=length).astype(np.float32, copy=False)
+        if codec_col is not None and str(codec_col[idx]).lower() == 'zlib':
+            import zlib as _z
+            try:
+                raw = _z.decompress(blob)
+            except Exception:
+                raw = blob
+            series = np.frombuffer(raw, dtype=dtype_col[idx], count=length).astype(np.float32, copy=False)
+        else:
+            series = np.frombuffer(blob, dtype=dtype_col[idx], count=length).astype(np.float32, copy=False)
         matrix[idx, :length] = series
     return matrix
 

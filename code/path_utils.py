@@ -1,9 +1,4 @@
-"""
-Utility helpers for accessing the reorganised project directories.
-"""
-"""
-Utility helpers for accessing the reorganised project directories.
-"""
+"""Utility helpers for accessing the reorganised project directories."""
 
 from pathlib import Path
 from typing import Union
@@ -63,9 +58,7 @@ def locate_file(path: Pathish) -> Path:
 
 
 def ensure_output_subdir(*parts: Pathish) -> Path:
-    """
-    Ensure that an output subdirectory exists and return its path.
-    """
+    """Ensure that an output subdirectory exists and return its path."""
     path = resolve_output(*parts)
     path.mkdir(parents=True, exist_ok=True)
     return path

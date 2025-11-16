@@ -222,7 +222,14 @@ def _worker_export_rowgroups(args: Tuple) -> Tuple[int, int, int]:
     ) = args
     allowed_map = allowed_map or {}
     pf = pq.ParquetFile(input_path)
+    # Detect optional codec column
     required_cols = ["Source", "Target", "TE", "LocalTE_bytes", "LocalTE_len", "LocalTE_dtype"]
+    try:
+        schema_names = set(pf.schema.names)
+        if "LocalTE_codec" in schema_names:
+            required_cols.append("LocalTE_codec")
+    except Exception:
+        pass
     value_type = pa.float16() if values_dtype_str == "float16" else pa.float32()
     writers: Dict[int, pq.ParquetWriter] = {}
     chunk_buffers = init_chunk_buffers()
@@ -241,6 +248,12 @@ def _worker_export_rowgroups(args: Tuple) -> Tuple[int, int, int]:
         batch_bytes = batch.column("LocalTE_bytes").to_pylist()
         batch_lens_np = batch.column("LocalTE_len").to_numpy(zero_copy_only=False)
         batch_dtypes = batch.column("LocalTE_dtype").to_pylist()
+        batch_codecs = None
+        try:
+            if "LocalTE_codec" in batch.schema.names:
+                batch_codecs = batch.column("LocalTE_codec").to_pylist()
+        except Exception:
+            batch_codecs = None
 
         batch_lens = [int(v) if v is not None else 0 for v in batch_lens_np]
 
@@ -249,14 +262,26 @@ def _worker_export_rowgroups(args: Tuple) -> Tuple[int, int, int]:
         filt_scores: List[float] = []
         filt_lens: List[int] = []
 
-        for s, t, blob, length, dtype_str, score in zip(batch_sources, batch_targets, batch_bytes, batch_lens, batch_dtypes, batch_scores):
+        for idx, (s, t, blob, length, dtype_str, score) in enumerate(zip(batch_sources, batch_targets, batch_bytes, batch_lens, batch_dtypes, batch_scores)):
             if blob is None or length is None or dtype_str is None or length == 0:
                 continue
             src_i = int(s)
             tgt_i = int(t)
             if allowed_map and (src_i not in allowed_map or tgt_i not in allowed_map[src_i]):
                 continue
-            arr = np.frombuffer(blob, dtype=dtype_str, count=int(length))
+            if batch_codecs is not None:
+                codec = batch_codecs[idx]
+            else:
+                codec = None
+            if codec and str(codec).lower() == 'zlib':
+                import zlib as _z
+                try:
+                    raw = _z.decompress(blob)
+                except Exception:
+                    raw = blob
+                arr = np.frombuffer(raw, dtype=dtype_str, count=int(length))
+            else:
+                arr = np.frombuffer(blob, dtype=dtype_str, count=int(length))
             if arr.size == 0:
                 continue
             values = arr.astype(np.float16 if values_dtype_str == "float16" else np.float32, copy=False)
@@ -491,6 +516,12 @@ def _export_dataset(args, selector_paths: Sequence[Path]) -> None:
         batch_bytes = batch.column("LocalTE_bytes").to_pylist()
         batch_lens_np = batch.column("LocalTE_len").to_numpy(zero_copy_only=False)
         batch_dtypes = batch.column("LocalTE_dtype").to_pylist()
+        batch_codecs = None
+        try:
+            if "LocalTE_codec" in batch.schema.names:
+                batch_codecs = batch.column("LocalTE_codec").to_pylist()
+        except Exception:
+            batch_codecs = None
 
         batch_lens = [int(v) if v is not None else 0 for v in batch_lens_np]
 
@@ -499,9 +530,9 @@ def _export_dataset(args, selector_paths: Sequence[Path]) -> None:
         filt_scores: List[float] = []
         filt_lens: List[int] = []
 
-        for s, t, score, blob, length, dtype_str in zip(
+        for idx, (s, t, score, blob, length, dtype_str) in enumerate(zip(
             batch_sources, batch_targets, batch_scores, batch_bytes, batch_lens, batch_dtypes
-        ):
+        )):
             progress.update(1)
             if blob is None or length is None or dtype_str is None or length == 0:
                 continue
@@ -509,7 +540,19 @@ def _export_dataset(args, selector_paths: Sequence[Path]) -> None:
             tgt_i = int(t)
             if allowed_map and (src_i not in allowed_map or tgt_i not in allowed_map[src_i]):
                 continue
-            arr = np.frombuffer(blob, dtype=dtype_str, count=int(length))
+            if batch_codecs is not None:
+                codec = batch_codecs[idx]
+            else:
+                codec = None
+            if codec and str(codec).lower() == 'zlib':
+                import zlib as _z
+                try:
+                    raw = _z.decompress(blob)
+                except Exception:
+                    raw = blob
+                arr = np.frombuffer(raw, dtype=dtype_str, count=int(length))
+            else:
+                arr = np.frombuffer(blob, dtype=dtype_str, count=int(length))
             if arr.size == 0:
                 continue
             values = arr.astype(values_dtype, copy=False) if arr.dtype != values_dtype else arr

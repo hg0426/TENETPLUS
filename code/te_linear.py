@@ -1,4 +1,8 @@
+import os
+import sys
+import time
 import numpy as np
+from typing import Callable
 
 try:
     from numpy.lib.stride_tricks import sliding_window_view as _sliding_window_view
@@ -51,12 +55,43 @@ def _source_past(series: np.ndarray, k: int) -> np.ndarray:
     return X
 
 
+def _rss_mb() -> float:
+    """Return current resident set size in MB (best-effort, Linux-friendly)."""
+    # Try /proc/self/statm -> RSS pages * page_size
+    try:
+        with open('/proc/self/statm', 'r') as f:
+            parts = f.read().split()
+            if len(parts) >= 2:
+                rss_pages = int(parts[1])
+                page_size = os.sysconf('SC_PAGE_SIZE') if hasattr(os, 'sysconf') else 4096
+                return (rss_pages * page_size) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+    # Fallback to parsing /proc/self/status VmRSS
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        kb = float(parts[1])
+                        return kb / 1024.0
+    except Exception:
+        pass
+    return 0.0
+
+
 def compute_linear_te_for_sources(
     ctx: LinearTEContext,
     sources: list[np.ndarray],
     ridge: float = 1e-9,
     batch_size: int = 256,
     return_local: bool = False,
+    # Memory control knobs (soft caps; safe defaults)
+    max_stack_mb: float = 128.0,
+    proj_block_mb: float = 64.0,
+    # Optional profiling callback; when None, honors env TE_LINEAR_PROFILE=1 to print progress
+    progress_hook: Callable | None = None,
 ) -> list[float] | tuple[list[float], list[np.ndarray]]:
     """
     Batched linear TE computation using GEMM + einsum to reduce Python loop overhead.
@@ -84,7 +119,25 @@ def compute_linear_te_for_sources(
     local_values: list[np.ndarray] | None = [] if return_local else None
     LOG2 = np.log(2.0)
 
-    for base in range(0, S, batch_size):
+    # Optional profiling set up (no overhead unless enabled)
+    prof_env = os.getenv('TE_LINEAR_PROFILE')
+    if progress_hook is None and prof_env:
+        def _default_hook(ev: str, **info):
+            try:
+                rss = _rss_mb()
+                ts = time.strftime('%H:%M:%S')
+                msg = {
+                    'event': ev,
+                    'rss_mb': round(rss, 2),
+                    **{k: (int(v) if isinstance(v, (int, np.integer)) else v) for k, v in info.items()}
+                }
+                print(f"[TE_LINEAR_PROFILE {ts}] {msg}", file=sys.stderr, flush=True)
+            except Exception:
+                pass
+        progress_hook = _default_hook
+
+    base = 0
+    while base < S:
         chunk = sources[base: base + batch_size]
         bs = len(chunk)
         # Build stacked past windows for the chunk: (nobs, k*bs)
@@ -92,10 +145,12 @@ def compute_linear_te_for_sources(
         for j, src in enumerate(chunk):
             Xs = _source_past(src, k)  # (nobs, k)
             stack[:, j * k:(j + 1) * k] = Xs
+        if progress_hook is not None:
+            progress_hook('chunk_start', base=base, bs=bs, nobs=ctx.nobs, k=k, stack_cols=stack.shape[1])
 
-        # Project and residualize: Q @ (QT @ stack)
+        # Project and residualize in one shot for speed
         proj = Q @ (QT @ stack)
-        Xr_stack = stack - proj  # (nobs, k*bs)
+        Xr_stack = stack - proj
         Xr = Xr_stack.reshape(ctx.nobs, k, bs)  # (nobs, k, bs)
 
         # Normal equations for all sources in chunk
@@ -128,6 +183,10 @@ def compute_linear_te_for_sources(
                 term = 0.5 * ((r_f * r_f) / var_f - (r_b * r_b) / var_bX) / LOG2
                 local = (const + term).astype(np.float32)
                 local_values.append(local)
+        if progress_hook is not None:
+            progress_hook('chunk_done', base=base, consumed=bs)
+
+        base += bs
 
     if return_local and local_values is not None:
         return te_values, local_values
