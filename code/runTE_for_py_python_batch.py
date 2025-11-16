@@ -1559,9 +1559,14 @@ def main(args):
     merge_threshold = 20  # Adjust based on desired maximum number of files
 
     # Run parallel batch processing (fast mode)
-    refine_requested = (args.mode in ('linear','poly','gcmi','disc','ordinal','kernel_grid')) and (args.hybrid_refine_topk_per_target > 0 or args.hybrid_refine_top_pct > 0.0)
+    refine_requested = (
+        args.mode in ("linear", "poly", "gcmi", "disc", "ordinal", "kernel_grid")
+        and (args.hybrid_refine_topk_per_target > 0 or args.hybrid_refine_top_pct > 0.0)
+    )
     stage1_enable_save = False if refine_requested else args.enable_intermediate_save
-    fast_output = 'TE_fast.parquet' if (args.mode in ('linear','poly','gcmi','disc','ordinal','kernel_grid')) else 'TE_result_all.parquet'
+    fast_output = "TE_fast.parquet" if (
+        args.mode in ("linear", "poly", "gcmi", "disc", "ordinal", "kernel_grid")
+    ) else "TE_result_all.parquet"
     run_parallel_batches(
         list_pairs=list_pairs,
         cell_gene_all=cell_gene_all,
@@ -1610,7 +1615,7 @@ def main(args):
                 logging.error(f"Failed to write final output {args.hybrid_output}: {e}")
             return
 
-        method = getattr(args, 'hybrid_refine_method', 'kernel')
+        method = getattr(args, "hybrid_refine_method", "kernel")
         logging.info(f"Selected {len(refine_pairs)} pairs for {method} refinement.")
 
         refine_progress_dir = f"{progress_dir}_{method}"
@@ -1627,9 +1632,46 @@ def main(args):
             buffer_size=buffer_size,
             merge_threshold=merge_threshold,
             enable_intermediate_save=True,
-            mode=('ksg' if method == 'ksg' else 'kernel'),
+            mode=("ksg" if method == "ksg" else "kernel"),
             output_file=out_name,
         )
+
+        # If the refined output file does not exist yet, consolidate
+        # any progress files into it (mirrors the fast-mode behaviour).
+        if not os.path.exists(out_name):
+            try:
+                combined_refine = consolidate_merged_results(
+                    refine_progress_dir,
+                    out_name,
+                    delete_after=True,
+                )
+            except Exception as e:
+                logging.error(
+                    f"Failed to consolidate refined progress files into {out_name}: {e}"
+                )
+                combined_refine = False
+            if not combined_refine:
+                logging.warning(
+                    "No refined progress files found; falling back to fast "
+                    f"results as final output {args.hybrid_output}."
+                )
+                try:
+                    copy_parquet_duckdb(fast_output, args.hybrid_output)
+                    print(
+                        f"Final results saved to {args.hybrid_output} "
+                        "(fast-only fallback)."
+                    )
+                    logging.info(
+                        f"Final results saved to {args.hybrid_output} "
+                        "(fast-only fallback)."
+                    )
+                except Exception as e2:
+                    logging.error(
+                        f"Failed to copy fast output {fast_output} "
+                        f"to {args.hybrid_output}: {e2}"
+                    )
+                    raise SystemExit(1)
+                return
 
         # Merge fast + refined using DuckDB to keep memory flat
         try:
@@ -1637,7 +1679,26 @@ def main(args):
             print(f"Final results saved to {args.hybrid_output}.")
             logging.info(f"Final results saved to {args.hybrid_output}.")
         except Exception as e:
-            logging.error(f"Failed to merge fast and refined outputs via DuckDB: {e}")
+            logging.error(
+                f"Failed to merge fast and refined outputs via DuckDB: {e}"
+            )
+            # On merge failure, keep the fast results as the final TE output.
+            try:
+                copy_parquet_duckdb(fast_output, args.hybrid_output)
+                print(
+                    f"Final results saved to {args.hybrid_output} "
+                    "(fast-only fallback after merge error)."
+                )
+                logging.info(
+                    f"Final results saved to {args.hybrid_output} "
+                    "(fast-only fallback after merge error)."
+                )
+            except Exception as e2:
+                logging.error(
+                    f"Failed to copy fast output {fast_output} "
+                    f"to {args.hybrid_output} after merge error: {e2}"
+                )
+                raise SystemExit(1)
         return
 
 

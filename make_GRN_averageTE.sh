@@ -29,6 +29,27 @@ show_summary() {
     echo "----------------------------------------"
 }
 
+usage() {
+    cat <<USAGE
+Usage: $0 <input_file> <output_file> <fdr_threshold> <te_cutoff>
+
+Interactive mode (no arguments):
+  - Prompts for:
+      1) Input TE table path (default: output/Local_TE_result_matrix_rowTF_colGN.parquet)
+      2) Output file (default: output/average_GRN.fdr0.01.parquet)
+      3) FDR threshold (default: 0.01)
+      4) TE cutoff (default: 0.0)
+
+Non-interactive mode:
+  - Provide all four arguments explicitly as shown above.
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
 if [ $# -eq 0 ]; then
     echo "Interactive mode for make_GRN_averageTE"
     echo "Press Enter to accept defaults shown in brackets."
@@ -70,7 +91,7 @@ if [ $# -eq 0 ]; then
     done
 else
     if [ $# -lt 4 ]; then
-        echo "Usage: $0 <input_file> <output_file> <fdr_threshold> <te_cutoff>"
+        usage
         exit 1
     fi
     INPUT_FILE="$1"

@@ -41,6 +41,37 @@ show_summary() {
     echo "--------------------------------------"
 }
 
+usage() {
+    cat <<USAGE
+Usage (recommended interactive): $0
+
+Interactive mode (no arguments):
+  - Prompts for:
+      1) Input TE parquet path
+      2) Output file path (optional; blank = skip write)
+      3) History length k
+      4) FDR threshold
+      5) TE cutoff
+      6) Chunk mode (yes/no) and parameters:
+           - chunk_dir (default: output/local_te_split_chunks)
+           - chunk_size (optional; auto from metadata when blank)
+           - chunk_workers
+      7) time_labels file (optional)
+      8) time_map parquet (optional)
+      9) max_timepoints (optional)
+
+Non-interactive shorthand:
+  $0 <input> <output> <history_k> <fdr> <te_cutoff>
+    - Uses chunk_dir=output/local_te_split_chunks, chunk_size=300,
+      chunk_workers = nproc (or 4 if unavailable).
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
 if [ $# -eq 0 ]; then
     echo "Interactive mode for make_GRN_localTE"
     echo "Press Enter to accept defaults shown in brackets."
