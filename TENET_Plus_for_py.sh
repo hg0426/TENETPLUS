@@ -152,13 +152,18 @@ prompt_history_length() {
         print_step "5" "Choose History Length k" \
             "Number of past timepoints to consider" \
             "Common choices: 1 or 2" \
-            "Default: 1"
-        local value=$(prompt_with_default "k" "$default")
+            "Default: 1 (or type 'auto' to select based on series length)"
+        local value
+        value=$(prompt_with_default "k (or 'auto')" "$default")
         if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
             HISTORY_LENGTH="$value"
             break
         fi
-        echo "[!] Please enter a positive integer for history length."
+        if [[ "${value,,}" == "auto" ]]; then
+            HISTORY_LENGTH="auto"
+            break
+        fi
+        echo "[!] Please enter a positive integer or 'auto' for history length."
         default="$value"
     done
 }
@@ -737,6 +742,9 @@ set -- "$ABS_INPUT" "$ARG2_TRIM" "$ABS_TRAJECTORY" "$ABS_CELL_SELECT" "${@:5}"
 
 write_replay_logs "$@"
 
+# Default HISTORY_LENGTH from 5th argument when not set via interactive mode
+HISTORY_LENGTH="${HISTORY_LENGTH:-$5}"
+
 cd "$OUTPUT_DIR"
 
 INPUT_FILE="$1"
@@ -977,6 +985,105 @@ PY
   fi
 fi
 
+# If requested, automatically select history length k based on series length
+if [[ "${HISTORY_LENGTH,,}" == "auto" ]]; then
+  set_stage "HISTORY_AUTO_SELECT"
+  echo "--- Auto-selecting history length k from cell_gene_trsps.parquet (per-series AR-BIC) ---"
+  AUTO_K=$("$PYTHON" - <<'PY'
+import math
+
+import numpy as np
+import pandas as pd
+
+
+def per_series_best_k(series_matrix, max_k, max_series=128):
+    """
+    For each sampled series, pick the AR order k (1..max_k) that minimises BIC,
+    then aggregate these per-series orders into a global k via the median.
+    """
+    n_genes, n_time = series_matrix.shape
+    if n_time < 4:
+        return 1
+
+    use_genes = min(n_genes, max_series)
+    idx = np.linspace(0, n_genes - 1, use_genes, dtype=int)
+    sub = series_matrix[idx]
+
+    best_orders = []
+
+    for row in sub:
+        y = np.asarray(row, dtype=float)
+        if not np.all(np.isfinite(y)):
+            continue
+        mu = y.mean()
+        sig = y.std()
+        if not np.isfinite(sig) or sig <= 0:
+            continue
+        y = (y - mu) / sig
+        N = y.size
+        bics = []
+        ks = []
+        for k in range(1, max_k + 1):
+            if N <= k + 1:
+                break
+            n_obs = N - k
+            Y = y[k:]
+            X = np.empty((n_obs, k), dtype=float)
+            for i in range(k):
+                X[:, i] = y[k - i - 1 : N - i - 1]
+            try:
+                beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
+            except np.linalg.LinAlgError:
+                continue
+            resid = Y - X @ beta
+            rss = float(resid @ resid)
+            if not np.isfinite(rss) or rss <= 0:
+                continue
+            bic = n_obs * math.log(rss / n_obs) + k * math.log(n_obs)
+            if math.isfinite(bic):
+                bics.append(bic)
+                ks.append(k)
+        if bics:
+            # series-specific best order
+            k_best = ks[int(np.argmin(bics))]
+            best_orders.append(int(k_best))
+
+    if not best_orders:
+        return 1
+
+    # Use the median order across series for robustness
+    orders = np.asarray(best_orders, dtype=int)
+    k_med = int(np.median(orders))
+    k_med = max(1, min(int(max_k), k_med))
+    return k_med
+
+
+try:
+    df = pd.read_parquet("cell_gene_trsps.parquet")
+    values = df.to_numpy()
+    n_timepoints = int(values.shape[1])
+except Exception:
+    print(1)
+else:
+    # Upper bound for k: keep at least ~min_effective observations and cap at 10
+    min_effective = 50
+    max_k = min(10, max(1, n_timepoints - min_effective))
+    if max_k <= 1:
+        print(1)
+    else:
+        k_sel = per_series_best_k(values, max_k=max_k)
+        if not isinstance(k_sel, int) or k_sel <= 0:
+            k_sel = 1
+        print(int(k_sel))
+PY
+  ) || AUTO_K=1
+  if ! [[ "$AUTO_K" =~ ^[0-9]+$ ]] || [ "$AUTO_K" -le 0 ]; then
+    AUTO_K=1
+  fi
+  HISTORY_LENGTH="$AUTO_K"
+  echo "--- Auto-selected history length k=$HISTORY_LENGTH ---"
+fi
+
 # TE computation: screen and refine options
 SCREEN_MODE="${9:-kernel}"
 REFINE_METHOD="${10:-none}"
@@ -1039,7 +1146,7 @@ if [[ "$SCREEN_MODE" == "linear" || "$SCREEN_MODE" == "poly" || "$SCREEN_MODE" =
     else
       PERM_ARGS+=(--perm_alpha "$PERM_ALPHA")
     fi
-    if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv $2 $5 \
+    if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
         --enable_intermediate_save \
         --mode "$SCREEN_MODE" \
         "${PERM_ARGS[@]}" \
@@ -1067,7 +1174,7 @@ if [[ "$SCREEN_MODE" == "linear" || "$SCREEN_MODE" == "poly" || "$SCREEN_MODE" =
       echo "Warning: Unknown refine method '$REFINE_METHOD'; skipping refinement."
     fi
 
-    if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_REFINE_${REFINE_METHOD}" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv $2 $5 \
+    if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_REFINE_${REFINE_METHOD}" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
         --enable_intermediate_save \
         --mode "$SCREEN_MODE" \
         "${REFINE_ARGS[@]}" \
@@ -1090,7 +1197,7 @@ else
     else
       PERM_ARGS+=(--perm_alpha "$PERM_ALPHA")
     fi
-    if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv $2 $5 \
+    if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
         --enable_intermediate_save \
         --mode "$SCREEN_MODE" \
         "${PERM_ARGS[@]}" \
@@ -1101,7 +1208,7 @@ else
       exit 1
     fi
   else
-    if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv $2 $5 \
+    if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
         --enable_intermediate_save \
         --mode "$SCREEN_MODE" \
         "${BUFFER_ARGS[@]}" \
