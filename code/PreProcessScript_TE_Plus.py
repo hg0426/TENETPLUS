@@ -211,6 +211,17 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
     """Run the TENET_Plus preprocessing and write all_pairs.csv."""
     start_time = time.time()
 
+    pair_mode = os.getenv("TENET_PAIR_MODE", "default").strip().lower()
+
+    # For all-pair modes we no longer materialise all_pairs.csv here; the TE core
+    # enumerates pairs implicitly in a streaming fashion using gene_names.
+    if pair_mode in ("gene_only", "all_feature", "all_pair"):
+        print(
+            f"[TENET_Plus] pair_mode={pair_mode}: skipping explicit all_pairs.csv "
+            "generation; TE core will enumerate full pairs implicitly."
+        )
+        return
+
     gene_chr_mapping = load_gene_chr_mapping("gene_chr.txt")
 
     transposed_matrix_path = coerce_output_path("cell_gene_trsps.parquet")

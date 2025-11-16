@@ -22,6 +22,11 @@ LOCAL_TE_MERGE_WORKERS=${LOCAL_TE_MERGE_WORKERS:-}
 LOCAL_TE_SPLIT_EXPORT=${LOCAL_TE_SPLIT_EXPORT:-on}
 LOCAL_TE_SPLIT_OUTPUT_DIR=${LOCAL_TE_SPLIT_OUTPUT_DIR:-local_te_split_chunks}
 
+TENET_GENE_FILTER=${TENET_GENE_FILTER:-none}
+
+# Global default for pair mode (overridable via interactive prompt or TENET_PAIR_MODE env)
+DEFAULT_PAIR_MODE=${TENET_PAIR_MODE:-default}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 CODE_DIR="$REPO_ROOT/code"
@@ -96,6 +101,15 @@ prompt_input_matrix() {
     done
 }
 
+prompt_gene_filter() {
+    local default="${TENET_GENE_FILTER:-none}"
+    print_step "1b" "Housekeeping Gene Filter" \
+        "none      = keep all genes" \
+        "ribo_mito = drop ribosomal (RPS/RPL/MRPS/MRPL) and mitochondrial (MT-) genes" \
+        "Can also be set via TENET_GENE_FILTER env."
+    TENET_GENE_FILTER=$(prompt_with_default "Gene filter (none/ribo_mito)" "$default")
+}
+
 prompt_jobs() {
     local suggested=$(command -v nproc >/dev/null && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
     local default="${NUM_JOBS:-}" 
@@ -168,6 +182,15 @@ prompt_history_length() {
     done
 }
 
+prompt_pair_mode() {
+    local default="${PAIR_MODE:-$DEFAULT_PAIR_MODE}"
+    print_step "7-1" "Pair Set" \
+        "default  = TF/peak-based pairs (original behaviour; honours mode 0-6)" \
+        "all_pair = use full all-pairs TE (select variant in step 7-2)" \
+        "Warning: all_pair can create O(F^2) edges and be very large."
+    PAIR_MODE=$(prompt_with_default "Pair mode (default/all_pair)" "$default")
+}
+
 prompt_species() {
     local default="${SPECIES:-}" 
     while true; do
@@ -185,10 +208,24 @@ prompt_species() {
 
 prompt_mode() {
     while true; do
-        print_step "7" "Select TENET Mode" \
-            "0 = RNA-only (TENET_TF)" \
-            "1-6 = TENET_Plus variations"
-        "$PYTHON" - <<'PY'
+        if [ "${PAIR_MODE:-$DEFAULT_PAIR_MODE}" = "all_pair" ]; then
+            print_step "7-2" "Select All-Pair TE Variant" \
+                "0 = RNA-only, all gene×gene pairs" \
+                "1 = TENET_Plus, all gene×gene pairs" \
+                "2 = TENET_Plus, all feature×feature pairs (genes+peaks)"
+            local default="${MODE_CODE:-}"
+            local value
+            value=$(prompt_with_default "All-pair mode (0-2)" "$default")
+            if [[ "$value" =~ ^[0-2]$ ]]; then
+                MODE_CODE="$value"
+                break
+            fi
+            echo "[!] Please enter 0, 1, or 2 for all-pair mode."
+        else
+            print_step "7-2" "Select TENET Mode" \
+                "0 = RNA-only (TENET_TF)" \
+                "1-6 = TENET_Plus variations"
+            "$PYTHON" - <<'PY'
 import importlib
 details = importlib.import_module("code.config_options").TENET_MODE_DETAILS
 print("  • Mode legend:")
@@ -197,14 +234,15 @@ for key in sorted(details, key=int):
     print(f"    [{key}] {info['name']}")
     print(f"        {info['description']}")
 PY
-        local default="${MODE_CODE:-}" 
-        local value=$(prompt_with_default "Mode (0-6)" "$default")
-        if [[ "$value" =~ ^[0-6]$ ]]; then
-            MODE_CODE="$value"
-            break
+            local default="${MODE_CODE:-}" 
+            local value
+            value=$(prompt_with_default "Mode (0-6)" "$default")
+            if [[ "$value" =~ ^[0-6]$ ]]; then
+                MODE_CODE="$value"
+                break
+            fi
+            echo "[!] Please enter an integer between 0 and 6."
         fi
-        echo "[!] Please enter an integer between 0 and 6."
-        default="$value"
     done
 }
 
@@ -232,6 +270,9 @@ update_defaults_after_mode() {
     DEFAULT_LOCAL_SPLIT_EXPORT="${LOCAL_TE_SPLIT_EXPORT:-on}"
     DEFAULT_LOCAL_SPLIT_DIR="${LOCAL_TE_SPLIT_OUTPUT_DIR:-local_te_split_chunks}"
     DEFAULT_RESULTS_BUFFER_ROWS="${TE_RESULTS_BUFFER_ROWS:-}"
+    DEFAULT_INTERMEDIATE_SAVE="${TENET_INTERMEDIATE_SAVE:-on}"
+    DEFAULT_BATCH_SIZE="${TE_BATCH_SIZE:-100}"
+    DEFAULT_PAIR_MODE="${TENET_PAIR_MODE:-default}"
     DEFAULT_TIME_STRIDE="1"
     DEFAULT_TIME_PCT="100"
     DEFAULT_TIME_SEED="42"
@@ -388,22 +429,39 @@ prompt_time_options() {
 
 prompt_results_buffer_rows() {
     local default="${RESULTS_BUFFER_ROWS:-$DEFAULT_RESULTS_BUFFER_ROWS}"
+    local default_bs="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
+    local default_is="${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}"
     print_step "19" "TE Results Buffering" \
-        "Rows to buffer before writing batch Parquet files" \
-        "Leave blank for auto (200000, or 5000 when storing LocalTE)"
+        "Intermediate save: on/off controls whether TE writes incremental Parquet batches for resume/restart" \
+        "Rows to buffer before writing batch Parquet files (results_buffer_rows)" \
+        "Leave results_buffer_rows blank for auto (200000, or 5000 when storing LocalTE)" \
+        "Batch size controls how many sources per target are processed together"
+    INTERMEDIATE_SAVE_CHOICE=$(prompt_with_default "Intermediate save (on/off)" "$default_is")
     RESULTS_BUFFER_ROWS=$(prompt_with_default "results_buffer_rows" "$default")
+    BATCH_SIZE=$(prompt_with_default "TE batch size" "$default_bs")
 }
 
 show_summary() {
     echo ""
     echo "--- Parameter Summary ---"
     echo " 1) Input matrix         : $INPUT_FILE"
+    echo " 1b) Gene filter         : ${TENET_GENE_FILTER:-none}"
     echo " 2) Parallel jobs        : $NUM_JOBS"
     echo " 3) Trajectory file      : $TRAJECTORY_FILE"
     echo " 4) Cell-select file     : $CELL_SELECT_FILE"
     echo " 5) History length (k)   : $HISTORY_LENGTH"
     echo " 6) Species              : $SPECIES"
-    echo " 7) Mode                 : $MODE_CODE"
+    echo " 7-1) Pair mode          : ${PAIR_MODE:-$DEFAULT_PAIR_MODE}"
+    if [ "${PAIR_MODE:-$DEFAULT_PAIR_MODE}" = "all_pair" ]; then
+        case "${MODE_CODE:-0}" in
+            0) echo " 7-2) All-pair mode      : 0 (RNA-only, all gene×gene)" ;;
+            1) echo " 7-2) All-pair mode      : 1 (TENET_Plus, all gene×gene)" ;;
+            2) echo " 7-2) All-pair mode      : 2 (TENET_Plus, all feature×feature)" ;;
+            *) echo " 7-2) All-pair mode      : ${MODE_CODE:-0}" ;;
+        esac
+    else
+        echo " 7-2) Mode               : $MODE_CODE"
+    fi
     echo " 8) Modality             : $MODALITY_CHOICE"
     echo " 9) Screening estimator  : $SCREEN_MODE"
     echo "10) Refinement method    : $REFINE_METHOD"
@@ -432,6 +490,12 @@ show_summary() {
         echo "19) Results buffer rows  : $RESULTS_BUFFER_ROWS"
     else
         echo "19) Results buffer rows  : <auto>"
+    fi
+    echo "    Intermediate save    : ${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}"
+    if [ -n "${BATCH_SIZE:-}" ]; then
+        echo "    TE batch size        : $BATCH_SIZE"
+    else
+        echo "    TE batch size        : 100 (default)"
     fi
     echo "18) Time subsampling     : stride=$TIME_STRIDE, pct=$TIME_PCT, seed=$TIME_SEED"
     echo "---------------------------"
@@ -475,7 +539,7 @@ run_with_stage() {
 build_replay_command() {
     local cmd=""
     local var val
-    for var in PYTHON MONITOR_GPU LOCAL_CHUNK_SIZE LOCAL_BUFFER_EDGES LOCAL_EXPORT_WORKERS \
+    for var in PYTHON MONITOR_GPU TENET_PAIR_MODE TENET_GENE_FILTER TENET_INTERMEDIATE_SAVE TE_BATCH_SIZE LOCAL_CHUNK_SIZE LOCAL_BUFFER_EDGES LOCAL_EXPORT_WORKERS \
                LOCAL_MERGE_WORKERS LOCAL_READ_BATCH LOCAL_THREADS_FLAG LOCAL_VALUES_DTYPE \
                LOCAL_SPLIT_EXPORT LOCAL_SPLIT_OUTPUT_DIR RESULTS_BUFFER_ROWS; do
         val="${!var-}"
@@ -527,6 +591,13 @@ Usage: $0 <input_file> <num_jobs> <trajectory_file> <cell_select_file> <history_
                6 = TENET_Plus peak->peak (cis)
 
 Optional:
+  Pair mode (interactive step 7-1):
+    default  = TF/peak-based pairs (above mode_code 0-6 semantics)
+    all_pair = use full all-pairs TE, then:
+                 mode_code 0 -> RNA-only, all gene×gene
+                 mode_code 1 -> TENET_Plus, all gene×gene
+                 mode_code 2 -> TENET_Plus, all feature×feature (genes+peaks)
+
   modality:    rna | atac | auto | none  (default auto for Plus modes, rna for TF mode; 'none' skips modality preprocessing)
   screen_mode: linear | poly | ksg | kernel | gcmi | disc | ordinal | kernel_grid  (default: kernel)
   refine_method: kernel | ksg | none        (default: none)
@@ -544,6 +615,11 @@ Optional:
   time_pct:    randomly keep P% timepoints  (default: 100; used when stride==1)
   time_seed:   RNG seed for time_pct        (default: 42)
   results_buffer_rows: rows to buffer in TE before flushing batch parquet files (default auto: 200000, or 5000 when storing LocalTE)
+
+Environment:
+  TENET_GENE_FILTER   : none | ribo_mito (default: none). When 'ribo_mito',
+                        drop genes whose names start with RPS, RPL, MRPS,
+                        MRPL, or MT- from the input matrix before analysis.
 USAGE
     exit 0
 }
@@ -573,11 +649,13 @@ if [ $# -eq 0 ]; then
 
     # Initial prompts
     prompt_input_matrix
+    prompt_gene_filter
     prompt_jobs
     prompt_trajectory_file
     prompt_cell_select_file
     prompt_history_length
     prompt_species
+    prompt_pair_mode
     prompt_mode
     update_defaults_after_mode
     prompt_modality
@@ -591,7 +669,7 @@ if [ $# -eq 0 ]; then
 
     while true; do
         show_summary
-        read -rp "Edit step number (1-19) or press Enter to continue: " EDIT_CHOICE
+        read -rp "Edit step (e.g. 1, 6, 7-1, 7-2, 19) or press Enter to continue: " EDIT_CHOICE
         EDIT_CHOICE=$(trim_whitespace "$EDIT_CHOICE")
         case "$EDIT_CHOICE" in
             "")
@@ -599,6 +677,9 @@ if [ $# -eq 0 ]; then
                 ;;
             1)
                 prompt_input_matrix
+                ;;
+            1b|1B)
+                prompt_gene_filter
                 ;;
             2)
                 prompt_jobs
@@ -615,9 +696,12 @@ if [ $# -eq 0 ]; then
             6)
                 prompt_species
                 ;;
-            7)
+            7|7-2|"7-2")
                 prompt_mode
                 update_defaults_after_mode
+                ;;
+            20|7-1|"7-1")
+                prompt_pair_mode
                 ;;
             8)
                 prompt_modality
@@ -739,11 +823,38 @@ ABS_INPUT=$(abs_path "$ARG1_TRIM")
 ABS_TRAJECTORY=$(abs_path "$ARG3_TRIM")
 ABS_CELL_SELECT=$(abs_path "$ARG4_TRIM")
 set -- "$ABS_INPUT" "$ARG2_TRIM" "$ABS_TRAJECTORY" "$ABS_CELL_SELECT" "${@:5}"
-
-write_replay_logs "$@"
-
 # Default HISTORY_LENGTH from 5th argument when not set via interactive mode
 HISTORY_LENGTH="${HISTORY_LENGTH:-$5}"
+
+# Normalise pair mode for downstream Python preprocess scripts
+if [ -n "${PAIR_MODE:-}" ]; then
+  if [ "$PAIR_MODE" = "all_pair" ]; then
+    case "${MODE_CODE:-0}" in
+      0) TENET_PAIR_MODE="gene_only" ;;      # RNA-only, all gene×gene
+      1) TENET_PAIR_MODE="gene_only" ;;      # TENET_Plus, all gene×gene
+      2) TENET_PAIR_MODE="all_feature" ;;    # TENET_Plus, all features×features
+      *) TENET_PAIR_MODE="gene_only" ;;
+    esac
+  else
+    TENET_PAIR_MODE="default"
+  fi
+elif [ -z "${TENET_PAIR_MODE:-}" ]; then
+  TENET_PAIR_MODE="default"
+fi
+
+# Normalise intermediate save choice for logging/replay
+TENET_INTERMEDIATE_SAVE="${INTERMEDIATE_SAVE_CHOICE:-${TENET_INTERMEDIATE_SAVE:-$DEFAULT_INTERMEDIATE_SAVE}}"
+
+# Normalise TE batch size for logging/replay
+if [ -n "${BATCH_SIZE:-}" ]; then
+  TE_BATCH_SIZE="$BATCH_SIZE"
+elif [ -n "${TE_BATCH_SIZE:-}" ]; then
+  TE_BATCH_SIZE="$TE_BATCH_SIZE"
+else
+  TE_BATCH_SIZE="100"
+fi
+
+write_replay_logs "$@"
 
 cd "$OUTPUT_DIR"
 
@@ -887,6 +998,31 @@ else
 fi
 
 
+GENE_FILTER_MODE="${TENET_GENE_FILTER:-none}"
+if [ "$GENE_FILTER_MODE" != "none" ]; then
+    set_stage "GENE_FILTER"
+    echo "--- Applying gene filter (${GENE_FILTER_MODE}) to matrix: ${matrix} ---"
+    case "$GENE_FILTER_MODE" in
+        ribo_mito|RIBO_MITO)
+            GENE_FILTER_PREFIXES="RPS,RPL,MRPS,MRPL,MT-"
+            ;;
+        *)
+            GENE_FILTER_PREFIXES=""
+            ;;
+    esac
+    if [ -n "$GENE_FILTER_PREFIXES" ]; then
+        FILTERED_MATRIX_PATH="$INPUT_DIR/filtered_matrix_gene_filtered.parquet"
+        if ! "$PYTHON" -m code.filter_genes --input "${matrix}" --output "$FILTERED_MATRIX_PATH" --exclude_prefixes "$GENE_FILTER_PREFIXES"; then
+            echo "Error in filter_genes.py. Exiting."
+            exit 1
+        fi
+        matrix="$FILTERED_MATRIX_PATH"
+    else
+        echo "TENET_GENE_FILTER='${GENE_FILTER_MODE}' not recognised; skipping gene filtering."
+    fi
+fi
+
+
 # Always regenerate gene_names from the current matrix
 set_stage "GENE_NAMES_REGEN"
 echo "--- Regenerating gene_names from matrix header ---"
@@ -945,15 +1081,23 @@ fi
 
 if [ "$7" -ne 0 ]; then
   echo 'Preprocessing(TENET_Plus)'
-  if ! run_with_stage "PREPROCESS_TENET_PLUS" "$PYTHON" -m code.PreProcessScript_TE_Plus $6 $7 "${matrix}"; then
-      echo "Error in PreProcessScript_TE_Plus.py. Exiting."
-      exit 1
-  fi
+    if [ "${TENET_PAIR_MODE:-default}" = "default" ]; then
+      if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_PLUS" "$PYTHON" -m code.PreProcessScript_TE_Plus $6 $7 "${matrix}"; then
+          echo "Error in PreProcessScript_TE_Plus.py. Exiting."
+          exit 1
+      fi
+    else
+      echo "--- Skipping PreProcessScript_TE_Plus (pair_mode=${TENET_PAIR_MODE}); using implicit all-pairs in TE core ---"
+    fi
 else
   echo 'Preprocessing(TENET_TF)'
-  if ! run_with_stage "PREPROCESS_TENET_TF" "$PYTHON" -m code.PreProcessScript_TENET_TF $6; then
-      echo "Error in PreProcessScript_TENET_TF.py. Exiting."
-      exit 1
+  if [ "${TENET_PAIR_MODE:-default}" = "default" ]; then
+    if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_TF" "$PYTHON" -m code.PreProcessScript_TENET_TF $6; then
+        echo "Error in PreProcessScript_TENET_TF.py. Exiting."
+        exit 1
+    fi
+  else
+    echo "--- Skipping PreProcessScript_TENET_TF (pair_mode=${TENET_PAIR_MODE}); using implicit all-pairs in TE core ---"
   fi
 fi
 
@@ -1134,6 +1278,40 @@ if [[ -n "${RESULTS_BUFFER_ROWS:-}" ]]; then
   fi
 fi
 
+# Decide intermediate saving behaviour
+INTERMEDIATE_SAVE_CHOICE="${INTERMEDIATE_SAVE_CHOICE:-${TENET_INTERMEDIATE_SAVE:-$DEFAULT_INTERMEDIATE_SAVE}}"
+ENABLE_INTERMEDIATE_ARGS=()
+case "${INTERMEDIATE_SAVE_CHOICE,,}" in
+  on|1|yes)
+    ENABLE_INTERMEDIATE_ARGS=(--enable_intermediate_save)
+    echo "--- Intermediate save: ON ---"
+    ;;
+  off|0|no)
+    echo "--- Intermediate save: OFF ---"
+    ;;
+  *)
+    # Fallback to default
+    if [[ "${DEFAULT_INTERMEDIATE_SAVE,,}" == "on" || "${DEFAULT_INTERMEDIATE_SAVE,,}" == "yes" ]]; then
+      ENABLE_INTERMEDIATE_ARGS=(--enable_intermediate_save)
+      echo "--- Intermediate save: ON (default) ---"
+    else
+      echo "--- Intermediate save: OFF (default) ---"
+    fi
+    ;;
+esac
+
+# TE batch size (optional; controls sources per target chunk)
+TE_BATCH_SIZE_VALUE="${BATCH_SIZE:-${TE_BATCH_SIZE:-}}"
+TE_BATCH_ARGS=()
+if [[ -n "${TE_BATCH_SIZE_VALUE:-}" ]]; then
+  if [[ "$TE_BATCH_SIZE_VALUE" =~ ^[0-9]+$ ]] && [ "$TE_BATCH_SIZE_VALUE" -gt 0 ]; then
+    TE_BATCH_ARGS+=(--batch_size "$TE_BATCH_SIZE_VALUE")
+    echo "--- TE batch size: $TE_BATCH_SIZE_VALUE ---"
+  else
+    echo "Warning: Ignoring invalid TE batch size '$TE_BATCH_SIZE_VALUE' (expected positive integer)."
+  fi
+fi
+
 if [[ "$SCREEN_MODE" == "linear" || "$SCREEN_MODE" == "poly" || "$SCREEN_MODE" == "gcmi" || "$SCREEN_MODE" == "disc" || "$SCREEN_MODE" == "ordinal" || "$SCREEN_MODE" == "kernel_grid" ]]; then
   # Screening with fast estimator, optional refinement
   if [[ "$PERMUTE" == "on" || "$PERMUTE" == "ON" || "$PERMUTE" == "1" ]]; then
@@ -1147,8 +1325,10 @@ if [[ "$SCREEN_MODE" == "linear" || "$SCREEN_MODE" == "poly" || "$SCREEN_MODE" =
       PERM_ARGS+=(--perm_alpha "$PERM_ALPHA")
     fi
     if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
-        --enable_intermediate_save \
+        "${ENABLE_INTERMEDIATE_ARGS[@]}" \
         --mode "$SCREEN_MODE" \
+        "${TE_BATCH_ARGS[@]}" \
+        --pair_mode "$TENET_PAIR_MODE" \
         "${PERM_ARGS[@]}" \
         "${BUFFER_ARGS[@]}" \
         "${LOCAL_ARGS[@]}" \
@@ -1175,8 +1355,10 @@ if [[ "$SCREEN_MODE" == "linear" || "$SCREEN_MODE" == "poly" || "$SCREEN_MODE" =
     fi
 
     if ! run_with_stage "TE_SCREEN(${SCREEN_MODE})_REFINE_${REFINE_METHOD}" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
-        --enable_intermediate_save \
+        "${ENABLE_INTERMEDIATE_ARGS[@]}" \
         --mode "$SCREEN_MODE" \
+        "${TE_BATCH_ARGS[@]}" \
+        --pair_mode "$TENET_PAIR_MODE" \
         "${REFINE_ARGS[@]}" \
         "${BUFFER_ARGS[@]}" \
         "${LOCAL_ARGS[@]}" \
@@ -1198,8 +1380,10 @@ else
       PERM_ARGS+=(--perm_alpha "$PERM_ALPHA")
     fi
     if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})_PERMUTE" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
-        --enable_intermediate_save \
+        "${ENABLE_INTERMEDIATE_ARGS[@]}" \
         --mode "$SCREEN_MODE" \
+        "${TE_BATCH_ARGS[@]}" \
+        --pair_mode "$TENET_PAIR_MODE" \
         "${PERM_ARGS[@]}" \
         "${BUFFER_ARGS[@]}" \
         "${LOCAL_ARGS[@]}" \
@@ -1209,8 +1393,10 @@ else
     fi
   else
     if ! run_with_stage "TE_DIRECT(${SCREEN_MODE})" "$PYTHON" -m code.runTE_for_py_python_batch all_pairs.csv "$2" "$HISTORY_LENGTH" \
-        --enable_intermediate_save \
+        "${ENABLE_INTERMEDIATE_ARGS[@]}" \
         --mode "$SCREEN_MODE" \
+        "${TE_BATCH_ARGS[@]}" \
+        --pair_mode "$TENET_PAIR_MODE" \
         "${BUFFER_ARGS[@]}" \
         "${LOCAL_ARGS[@]}" \
         "${TIME_ARGS[@]}"; then
@@ -1220,7 +1406,7 @@ else
   fi
 fi
 
-if ! run_with_stage "MATRIX_GENERATE" "$PYTHON" -m code.Matrix_generate TE_result_all.parquet $6 $7; then
+if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "MATRIX_GENERATE" "$PYTHON" -m code.Matrix_generate TE_result_all.parquet $6 $7; then
     echo "Error in Matrix_generate.py. Exiting."
     exit 1
 fi
@@ -1231,14 +1417,14 @@ if [[ "$STORE_LOCAL_TE" == "on" || "$STORE_LOCAL_TE" == "ON" || "$STORE_LOCAL_TE
     if [[ "${LOCAL_TE_SPLIT_EXPORT,,}" == "on" ]]; then
         # Build selector-based inputs if selector files exist
         SEL_INPUTS=()
-        if [[ -f Local_TE_result_matrix_rowTF_colGN.parquet ]]; then
-            SEL_INPUTS+=("TE_result_all.parquet=Local_TE_result_matrix_rowTF_colGN.parquet")
+        if [[ -f TE_TF_GN.parquet ]]; then
+            SEL_INPUTS+=("TE_result_all.parquet=TE_TF_GN.parquet")
         fi
-        if [[ -f Local_TE_result_matrix_rowTF_colPK.parquet ]]; then
-            SEL_INPUTS+=("TE_result_all.parquet=Local_TE_result_matrix_rowTF_colPK.parquet")
+        if [[ -f TE_TF_PK.parquet ]]; then
+            SEL_INPUTS+=("TE_result_all.parquet=TE_TF_PK.parquet")
         fi
-        if [[ -f Local_TE_result_matrix_rowPeak_colGN.parquet ]]; then
-            SEL_INPUTS+=("TE_result_all.parquet=Local_TE_result_matrix_rowPeak_colGN.parquet")
+        if [[ -f TE_PK_GN.parquet ]]; then
+            SEL_INPUTS+=("TE_result_all.parquet=TE_PK_GN.parquet")
         fi
         # If no selectors found, fall back to single export
         if [[ ${#SEL_INPUTS[@]} -gt 0 ]]; then

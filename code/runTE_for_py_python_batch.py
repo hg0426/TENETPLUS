@@ -1154,7 +1154,22 @@ def merge_fast_and_refined_duckdb(fast_path: str, refined_path: str, out_path: s
     finally:
         con.close()
 
-def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width, num_cpus, batch_size, progress_dir, buffer_size=100000, merge_threshold=50, enable_intermediate_save=True, mode='linear', output_file='TE_result_all.parquet'):
+def run_parallel_batches(
+    list_pairs,
+    cell_gene_all,
+    historyLength,
+    kernel_width,
+    num_cpus,
+    batch_size,
+    progress_dir,
+    buffer_size=100000,
+    merge_threshold=50,
+    enable_intermediate_save=True,
+    mode='linear',
+    output_file='TE_result_all.parquet',
+    pair_mode: str = "default",
+    pair_index_info: dict | None = None,
+):
     """
     Processes the list of pairs in batches using multiprocessing Pool.
     Writes results to Parquet files incrementally in the specified progress directory if enable_intermediate_save is True.
@@ -1171,22 +1186,56 @@ def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width,
         merge_threshold (int): Number of batch Parquet files to trigger a merge.
         enable_intermediate_save (bool): Flag to enable/disable intermediate saving.
     """
+
     if enable_intermediate_save:
         # Ensure the progress directory exists
         os.makedirs(progress_dir, exist_ok=True)
 
-    # Group by target to reuse destination computations
-    target_to_sources = {}
-    for src, tgt in list_pairs:
-        target_to_sources.setdefault(int(tgt), []).append(int(src))
+    # Build work units. For the default mode, we group the explicit list_pairs by
+    # target. For all-pair streaming modes, we construct (target, source_chunk)
+    # implicitly from the feature indices to avoid materialising all pairs.
+    work_units = None
 
-    # Build work units per target chunk
-    work_units = []
-    for tgt, srcs in target_to_sources.items():
-        for i in range(0, len(srcs), batch_size):
-            work_units.append((tgt, srcs[i:i + batch_size], historyLength, kernel_width, mode))
+    if pair_mode == "default":
+        # Group by target to reuse destination computations
+        target_to_sources = {}
+        for src, tgt in list_pairs:
+            target_to_sources.setdefault(int(tgt), []).append(int(src))
 
-    total_batches = len(work_units)
+        work_units = [
+            (tgt, srcs[i : i + batch_size], historyLength, kernel_width, mode)
+            for tgt, srcs in target_to_sources.items()
+            for i in range(0, len(srcs), batch_size)
+        ]
+        total_batches = len(work_units)
+
+        def work_iter():
+            for w in work_units:
+                yield w
+
+    else:
+        if pair_index_info is None or "indices" not in pair_index_info:
+            raise ValueError("pair_index_info with 'indices' is required for all-pair modes.")
+        indices = list(pair_index_info["indices"])
+        n = len(indices)
+        if n <= 1:
+            return
+        # Number of chunks per target: ceil((n-1)/batch_size)
+        per_target_chunks = (n - 1 + batch_size - 1) // batch_size
+        total_batches = n * per_target_chunks
+
+        def work_iter():
+            for tgt in indices:
+                chunk = []
+                for src in indices:
+                    if src == tgt:
+                        continue
+                    chunk.append(src)
+                    if len(chunk) >= batch_size:
+                        yield (tgt, list(chunk), historyLength, kernel_width, mode)
+                        chunk.clear()
+                if chunk:
+                    yield (tgt, list(chunk), historyLength, kernel_width, mode)
 
     # Initialize buffer for accumulating batches
     buffered_batches = []
@@ -1196,7 +1245,7 @@ def run_parallel_batches(list_pairs, cell_gene_all, historyLength, kernel_width,
     # Use multiprocessing Pool for parallel processing
     with multiprocessing.Pool(processes=num_cpus) as pool:
         with tqdm(total=total_batches, desc="Processing Chunks") as pbar:
-            for batch_result in pool.imap_unordered(_process_chunk, work_units, chunksize=1):
+            for batch_result in pool.imap_unordered(_process_chunk, work_iter(), chunksize=1):
                 # Prepare DataFrame for the batch
                 batch_records = []
                 for row in batch_result:
@@ -1482,67 +1531,101 @@ def main(args):
     if args.enable_intermediate_save:
         os.makedirs(progress_dir, exist_ok=True)
 
-    # Load or initialize list of pairs
-    if args.enable_intermediate_save:
-        list_pairs = load_progress(args.input_csv, progress_dir)
-    else:
-        try:
-            list_pairs = pd.read_csv(args.input_csv, delimiter=',', header=None).to_numpy().astype(int)
-            logging.info(f"Loaded {len(list_pairs)} pairs from {args.input_csv}.")
-        except Exception as e:
-            logging.error(f"Error loading input CSV {args.input_csv}: {e}")
-            return np.array([])
+    pair_mode = getattr(args, "pair_mode", "default")
+    pair_index_info = None
 
-    total_pairs = len(list_pairs)
-    print(f"Total pairs to process: {total_pairs}")
-    logging.info(f"Total pairs to process: {total_pairs}")
-
-    if total_pairs == 0 and args.enable_intermediate_save:
-        print("All pairs have already been processed.")
-        logging.info("All pairs have already been processed.")
-
-        # If intermediate files exist, consolidate them into the final result
-        all_batches = []
-        for fname in sorted(os.listdir(progress_dir)):
-            if fname.endswith('.parquet') and fname.startswith('merged_'):
-                try:
-                    batch_df = pd.read_parquet(os.path.join(progress_dir, fname))
-                    all_batches.append(batch_df)
-                    logging.info(f"Loaded batch {fname} for consolidation.")
-                except Exception as e:
-                    print(f"Error reading file {fname}: {e}")
-                    logging.error(f"Error reading file {fname}: {e}")
-
-        if all_batches:
+    if pair_mode == "default":
+        # Load or initialize list of pairs from CSV/progress directory
+        if args.enable_intermediate_save:
+            list_pairs = load_progress(args.input_csv, progress_dir)
+        else:
             try:
-                final_results_df = pd.concat(all_batches, ignore_index=True)
-                # output_file not accessible here; keep default filename for intermediate mode
-                final_results_df.to_parquet('TE_result_all.parquet', index=False)
-                print("Final results saved to TE_result_all.parquet.")
-                logging.info("Final results saved to TE_result_all.parquet.")
+                list_pairs = pd.read_csv(args.input_csv, delimiter=',', header=None).to_numpy().astype(int)
+                logging.info(f"Loaded {len(list_pairs)} pairs from {args.input_csv}.")
             except Exception as e:
-                print(f"Error saving final results: {e}")
-                logging.error(f"Error saving final results: {e}")
-                return
+                logging.error(f"Error loading input CSV {args.input_csv}: {e}")
+                return np.array([])
 
-            # Optionally, delete intermediate merged files
-            for fname in os.listdir(progress_dir):
+        total_pairs = len(list_pairs)
+        print(f"Total pairs to process: {total_pairs}")
+        logging.info(f"Total pairs to process: {total_pairs}")
+
+        if total_pairs == 0 and args.enable_intermediate_save:
+            print("All pairs have already been processed.")
+            logging.info("All pairs have already been processed.")
+
+            # If intermediate files exist, consolidate them into the final result
+            all_batches = []
+            for fname in sorted(os.listdir(progress_dir)):
                 if fname.endswith('.parquet') and fname.startswith('merged_'):
                     try:
-                        os.remove(os.path.join(progress_dir, fname))
-                        logging.info(f"Deleted merged file {fname}.")
+                        batch_df = pd.read_parquet(os.path.join(progress_dir, fname))
+                        all_batches.append(batch_df)
+                        logging.info(f"Loaded batch {fname} for consolidation.")
                     except Exception as e:
-                        print(f"Error deleting file {fname}: {e}")
-                        logging.error(f"Error deleting file {fname}: {e}")
-            print("Intermediate merged progress files have been deleted.")
-            logging.info("Intermediate merged progress files have been deleted.")
+                        print(f"Error reading file {fname}: {e}")
+                        logging.error(f"Error reading file {fname}: {e}")
+
+            if all_batches:
+                try:
+                    final_results_df = pd.concat(all_batches, ignore_index=True)
+                    # output_file not accessible here; keep default filename for intermediate mode
+                    final_results_df.to_parquet('TE_result_all.parquet', index=False)
+                    print("Final results saved to TE_result_all.parquet.")
+                    logging.info("Final results saved to TE_result_all.parquet.")
+                except Exception as e:
+                    print(f"Error saving final results: {e}")
+                    logging.error(f"Error saving final results: {e}")
+                    return
+
+                # Optionally, delete intermediate merged files
+                for fname in os.listdir(progress_dir):
+                    if fname.endswith('.parquet') and fname.startswith('merged_'):
+                        try:
+                            os.remove(os.path.join(progress_dir, fname))
+                            logging.info(f"Deleted merged file {fname}.")
+                        except Exception as e:
+                            print(f"Error deleting file {fname}: {e}")
+                            logging.error(f"Error deleting file {fname}: {e}")
+                print("Intermediate merged progress files have been deleted.")
+                logging.info("Intermediate merged progress files have been deleted.")
+            else:
+                print("No progress files found to combine.")
+                logging.info("No progress files found to combine.")
+            return
+    else:
+        # Implicit all-pair modes: derive indices from gene_names and/or matrix rows
+        names = ensure_gene_names()
+        n_features = GLOBAL_CELL_GENE.shape[0]
+        if names and len(names) == n_features:
+            all_idx = np.arange(1, n_features + 1, dtype=int)
+            if pair_mode == "gene_only":
+                mask = np.array([not str(n).startswith("chr") for n in names], dtype=bool)
+                indices = all_idx[mask]
+            elif pair_mode == "all_feature":
+                indices = all_idx
+            else:
+                indices = all_idx
         else:
-            print("No progress files found to combine.")
-            logging.info("No progress files found to combine.")
-        return
+            all_idx = np.arange(1, n_features + 1, dtype=int)
+            indices = all_idx
+        if indices.size <= 1:
+            print("[TE] Not enough features to build all-pair TE.")
+            logging.warning("Not enough features to build all-pair TE.")
+            return
+        pair_index_info = {"indices": indices}
+        list_pairs = None
+        total_pairs = int(indices.size) * int(indices.size - 1)
+        print(f"Total pairs to process (implicit {pair_mode}): {total_pairs}")
+        logging.info(f"Total pairs to process (implicit {pair_mode}): {total_pairs}")
 
     # Define source chunk size per target (smaller for faster first results)
-    batch_size = 100  # Adjust based on memory and performance considerations
+    try:
+        batch_size = int(getattr(args, "batch_size", 100) or 100)
+        if batch_size <= 0:
+            batch_size = 100
+    except Exception:
+        batch_size = 100  # Adjust based on memory and performance considerations
 
     # Define buffer size (number of result rows to accumulate before writing)
     if args.results_buffer_rows is None:
@@ -1580,6 +1663,8 @@ def main(args):
         enable_intermediate_save=stage1_enable_save,
         mode=args.mode,
         output_file=fast_output,
+        pair_mode=pair_mode,
+        pair_index_info=pair_index_info,
     )
 
     if stage1_enable_save and not os.path.exists(fast_output):
@@ -1934,6 +2019,15 @@ if __name__ == "__main__":
     parser.add_argument('--profile_linear_mem', action='store_true', help="Enable detailed memory tracing for linear TE (prints to stderr).")
     parser.add_argument('--pool_maxtasks', type=int, default=None, help="Recycle worker processes after N tasks to reduce RSS growth.")
     parser.add_argument('--results_buffer_rows', type=int, default=None, help="Maximum TE rows to buffer in memory before flushing (default: 200000, or 5000 when storing local TE).")
+    parser.add_argument('--batch_size', type=int, default=100, help="Sources per target chunk for TE computation (default: 100).")
+    parser.add_argument(
+        '--pair_mode',
+        choices=['default', 'gene_only', 'all_feature'],
+        default='default',
+        help="Pair generation mode: 'default' uses pairs from input_csv; "
+             "'gene_only' and 'all_feature' enumerate all pairs implicitly "
+             "in a streaming fashion (avoids materialising all_pairs.csv).",
+    )
     # Time subsampling options
     parser.add_argument('--time_stride', type=int, default=1, help="Use every N-th timepoint (applied before windowing). Overrides time_pct when >1.")
     parser.add_argument('--time_pct', type=float, default=100.0, help="Randomly sample this percent of timepoints per series (0-100]. Used only when stride==1.")

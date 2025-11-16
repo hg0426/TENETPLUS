@@ -73,11 +73,23 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 if [ $# -eq 0 ]; then
+    # Auto-detect a reasonable default input from recent Matrix_generate outputs.
+    if [ -z "${INPUT_FILE:-}" ]; then
+        if   [ -f "output/TE_TF_GN.parquet" ]; then
+            INPUT_FILE="output/TE_TF_GN.parquet"
+        elif [ -f "output/TE_GN_GN.parquet" ]; then
+            INPUT_FILE="output/TE_GN_GN.parquet"
+        elif [ -f "output/TE_all_features.parquet" ]; then
+            INPUT_FILE="output/TE_all_features.parquet"
+        else
+            INPUT_FILE="output/TE_TF_GN.parquet"
+        fi
+    fi
+
     echo "Interactive mode for make_GRN_localTE"
     echo "Press Enter to accept defaults shown in brackets."
 
-    INPUT_FILE="${INPUT_FILE:-output/Local_TE_result_matrix_rowTF_colGN.parquet}"
-    OUTPUT_FILE="${OUTPUT_FILE:-output/LocalTE_TF_GN_fdr_0_01.parquet}"
+    OUTPUT_FILE="${OUTPUT_FILE:-output/Local_TE_TF_GN_fdr_0_01.parquet}"
     HISTORY_LENGTH="${HISTORY_LENGTH:-1}"
     FDR_THRESHOLD="${FDR_THRESHOLD:-0.01}"
     TE_CUTOFF="${TE_CUTOFF:-0.0}"

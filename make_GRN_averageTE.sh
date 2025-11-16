@@ -35,7 +35,7 @@ Usage: $0 <input_file> <output_file> <fdr_threshold> <te_cutoff>
 
 Interactive mode (no arguments):
   - Prompts for:
-      1) Input TE table path (default: output/Local_TE_result_matrix_rowTF_colGN.parquet)
+      1) Input TE table path
       2) Output file (default: output/average_GRN.fdr0.01.parquet)
       3) FDR threshold (default: 0.01)
       4) TE cutoff (default: 0.0)
@@ -51,10 +51,22 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 if [ $# -eq 0 ]; then
+    # Prefer mode-aware defaults from the newest Matrix_generate outputs.
+    if [ -z "${INPUT_FILE:-}" ]; then
+        if   [ -f "output/TE_TF_GN.parquet" ]; then
+            INPUT_FILE="output/TE_TF_GN.parquet"
+        elif [ -f "output/TE_GN_GN.parquet" ]; then
+            INPUT_FILE="output/TE_GN_GN.parquet"
+        elif [ -f "output/TE_all_features.parquet" ]; then
+            INPUT_FILE="output/TE_all_features.parquet"
+        else
+            INPUT_FILE="output/TE_TF_GN.parquet"
+        fi
+    fi
+
     echo "Interactive mode for make_GRN_averageTE"
     echo "Press Enter to accept defaults shown in brackets."
 
-    INPUT_FILE="${INPUT_FILE:-output/Local_TE_result_matrix_rowTF_colGN.parquet}"
     OUTPUT_FILE="${OUTPUT_FILE:-output/average_GRN.fdr0.01.parquet}"
     FDR_THRESHOLD="${FDR_THRESHOLD:-0.01}"
     TE_CUTOFF="${TE_CUTOFF:-0.0}"

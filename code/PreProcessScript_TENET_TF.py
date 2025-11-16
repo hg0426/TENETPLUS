@@ -1,4 +1,5 @@
 import csv
+import os
 import sys
 import time
 
@@ -32,12 +33,21 @@ def run_preprocess(species: str) -> None:
     start_time = time.time()
 
     gene_names = load_file_to_list("gene_names")
+    gene_names_dict = {name: idx for idx, name in enumerate(gene_names)}
+    pair_mode = os.getenv("TENET_PAIR_MODE", "default").strip().lower()
+
+    # For all-pair modes we no longer materialise all_pairs.csv here; the TE core
+    # enumerates pairs implicitly in a streaming fashion.
+    if pair_mode in ("gene_only", "all_feature", "all_pair"):
+        print(
+            f"[TENET_TF] pair_mode={pair_mode}: skipping explicit all_pairs.csv "
+            "generation; TE core will enumerate full pairs implicitly."
+        )
+        return
+
     tf_list = load_file_to_list(
         f"GO_symbol_{species}_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
     )
-
-    gene_names_dict = {name: idx for idx, name in enumerate(gene_names)}
-
     gene_pairs_indices = create_gene_pairs(gene_names_dict, tf_list)
     output_path = coerce_output_path("all_pairs.csv")
     with open(output_path, "w", encoding="utf-8", newline="") as f:
