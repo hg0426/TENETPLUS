@@ -74,17 +74,48 @@ Example:
   1 human 1
 ```
 
-The compact command above runs the included example dataset with the current defaults: kernel TE, no refinement, no permutation, no LocalTE storage, FDR network export on, and TF->gene indirect trimming on.
+The compact command above runs the included example dataset with the current defaults: kernel TE, no permutation, no LocalTE storage, FDR network export on, and TF->gene indirect trimming on.
 
-### Extended CLI
+### Optional Toggles for Scripts
 
-For scripts that need explicit toggles, the full positional form is:
+The kernel package keeps the positional command short. Use environment
+variables for optional behavior.
+
+Common examples:
 
 ```bash
-./TENET_Plus_for_py.sh <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode> [none] [kernel] [none] [0] [0] [permute] [perm_n] [0] [0] [perm_fdr] [perm_q_alpha] [perm_alpha] [store_local_te] [1] [100] [42] [results_buffer_rows]
+# Write outputs to a separate run directory.
+TENET_OUTPUT_DIR=output/my_run \
+./TENET_Plus_for_py.sh input/merged_expression_data.csv 32 input/trajectory.txt input/cell_select.txt 1 human 1
+
+# Skip automatic FDR network generation.
+TENET_MAKE_GRN=off \
+./TENET_Plus_for_py.sh input/merged_expression_data.csv 32 input/trajectory.txt input/cell_select.txt 1 human 1
+
+# Enable LocalTE storage.
+TENET_STORE_LOCAL_TE=on \
+./TENET_Plus_for_py.sh input/merged_expression_data.csv 32 input/trajectory.txt input/cell_select.txt 1 human 1
+
+# Enable permutation on GRN-FDR candidates.
+TENET_PERMUTE=on \
+TENET_PERM_N=100 \
+TENET_PERM_CANDIDATE_GRN_FDR=0.01 \
+./TENET_Plus_for_py.sh input/merged_expression_data.csv 32 input/trajectory.txt input/cell_select.txt 1 human 1
 ```
 
-In this package, `screen_mode` must be `kernel` and `refine_method` must be `none`.
+Useful environment variables:
+
+- `TENET_OUTPUT_DIR`: output directory; relative paths are resolved from the package root.
+- `TENET_MAKE_GRN`: `on` or `off` (default `on`).
+- `TENET_GRN_FDR`: FDR alpha for generated networks (default `0.01`).
+- `TENET_TRIM_INDIRECT`: `on` or `off`; trims TF->gene only when enabled.
+- `TENET_STORE_LOCAL_TE`: `on` or `off` (default `off`).
+- `TENET_PERMUTE`: `on` or `off` (default `off`).
+- `TENET_PERM_N`: number of permutations (default `100`).
+- `TENET_PERM_FDR`: `on` or `off`; use permutation q-value threshold when enabled.
+- `TENET_PERM_Q_ALPHA`: permutation q-value threshold (default `0.05`).
+- `TENET_PERM_ALPHA`: permutation p-value threshold (default `0.01`).
+- `TENET_RESULTS_BUFFER_ROWS`: TE result write buffer size; leave unset for auto.
 
 ## Network Modes
 
@@ -216,18 +247,19 @@ Each command writes `<network>.outdegree.txt`.
 
 ## Optional - Permutation
 
-Permutation can be enabled through the extended CLI or the interactive prompt. For faster candidate-restricted permutation, use GRN-FDR candidates:
+Permutation can be enabled through environment variables or the interactive prompt. For faster candidate-restricted permutation, use GRN-FDR candidates:
 
 ```bash
+TENET_PERMUTE=on \
+TENET_PERM_N=100 \
 TENET_PERM_CANDIDATE_GRN_FDR=0.01 \
 ./TENET_Plus_for_py.sh \
-  <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode> \
-  none kernel none 0 0 on 100
+  <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode>
 ```
 
 ## Optional - LocalTE Storage
 
-LocalTE storage can be enabled interactively or through the extended CLI. It creates larger outputs and can be tuned with:
+LocalTE storage can be enabled interactively or with `TENET_STORE_LOCAL_TE=on`. It creates larger outputs and can be tuned with:
 
 - `LOCAL_TE_CHUNK_SIZE` (default `300`)
 - `LOCAL_TE_VALUES_DTYPE` (`float16` by default)

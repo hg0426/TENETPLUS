@@ -3608,34 +3608,14 @@ def main(args):
     except Exception:
         LOCAL_TE_CODEC = os.getenv('TE_LOCALTE_CODEC', 'zlib').lower()
 
-    # Optional: build global timepoint subsample indices
     global TIME_SUBSAMPLE_INDICES
     TIME_SUBSAMPLE_INDICES = None
-    try:
-        stride = int(getattr(args, 'time_stride', 1) or 1)
-        pct = float(getattr(args, 'time_pct', 100.0) or 100.0)
-        seed = int(getattr(args, 'time_seed', 42) or 42)
-    except Exception:
-        stride, pct, seed = 1, 100.0, 42
-    # Determine series length from the first row
     try:
         probe = _get_series(1)
         N_series = int(probe.size)
     except Exception:
         N_series = None
-    if N_series and N_series > 0:
-        if stride > 1:
-            idx = np.arange(0, N_series, stride, dtype=int)
-            if idx.size > 0:
-                TIME_SUBSAMPLE_INDICES = idx
-        elif 0.0 < pct < 100.0:
-            m = max(0, min(N_series, int(np.ceil(N_series * (pct / 100.0)))))
-            if m > 0:
-                rng = np.random.default_rng(seed)
-                idx = np.sort(rng.choice(N_series, size=m, replace=False)).astype(int)
-                TIME_SUBSAMPLE_INDICES = idx
-        if TIME_SUBSAMPLE_INDICES is not None:
-            logging.info(f"Time subsampling enabled: using {TIME_SUBSAMPLE_INDICES.size}/{N_series} timepoints (stride={stride}, pct={pct}).")
+
     # Write time index map for LocalTE consumers (maps LocalIndex -> OriginalIndex)
     try:
         indices = TIME_SUBSAMPLE_INDICES if TIME_SUBSAMPLE_INDICES is not None else np.arange(N_series or 0, dtype=int)
@@ -3951,18 +3931,7 @@ def main(args):
                 f"te_cutoff={float(args.perm_candidate_te_cutoff):g}, "
                 f"pairs={len(perm_pairs)}"
             )
-        elif args.permute_topk_per_target and args.permute_topk_per_target > 0:
-            k = int(args.permute_topk_per_target)
-            df_fast_sorted = df_fast.sort_values(['Target', 'TE'], ascending=[True, False])
-            candidate_subset = df_fast_sorted.groupby('Target', as_index=False).head(k)
-            perm_pairs = candidate_subset[['Source', 'Target']].to_numpy(dtype=int)
-        elif args.permute_top_pct and args.permute_top_pct > 0.0:
-            pct = float(args.permute_top_pct)
-            thresh = df_fast['TE'].quantile(max(min(pct, 100.0), 0.0) / 100.0)
-            candidate_subset = df_fast[df_fast['TE'] >= thresh]
-            perm_pairs = candidate_subset[['Source', 'Target']].to_numpy(dtype=int)
         else:
-            # all pairs
             perm_pairs = df_fast[['Source', 'Target']].to_numpy(dtype=int)
 
         logging.info(f"Permutation test (kernel): {len(perm_pairs)} pairs selected.")
@@ -4226,8 +4195,6 @@ if __name__ == "__main__":
     parser.add_argument('--perm_seed', type=int, default=42, help="Base RNG seed for permutations.")
     parser.add_argument('--perm_candidate_grn_fdr', dest='perm_candidate_grn_fdr', type=float, default=0.0, help="If >0, select permutation candidates by GRN global z-score + BH-FDR at this alpha.")
     parser.add_argument('--perm_candidate_te_cutoff', type=float, default=0.0, help="TE cutoff applied before GRN-FDR permutation candidate selection.")
-    parser.add_argument('--permute_topk_per_target', type=int, default=0, help="If >0, run permutations for top-K pairs per target by fast TE.")
-    parser.add_argument('--permute_top_pct', type=float, default=0.0, help="If >0, run permutations for global top percentile [0-100].")
     parser.add_argument('--perm_alpha', type=float, default=0.01, help="Significance threshold for edges (p-value).")
     parser.add_argument('--perm_output', type=str, default='TE_kernel_perm.parquet', help="Output file for permutation results.")
     parser.add_argument('--network_output', type=str, default='network_edges.parquet', help="Output file for significant network edges.")
@@ -4246,11 +4213,6 @@ if __name__ == "__main__":
              "'gene_only' and 'all_feature' enumerate all pairs implicitly "
              "in a streaming fashion (avoids materialising all_pairs.csv).",
     )
-    # Time subsampling options
-    parser.add_argument('--time_stride', type=int, default=1, help="Use every N-th timepoint (applied before windowing). Overrides time_pct when >1.")
-    parser.add_argument('--time_pct', type=float, default=100.0, help="Randomly sample this percent of timepoints per series (0-100]. Used only when stride==1.")
-    parser.add_argument('--time_seed', type=int, default=42, help="RNG seed for time_pct sampling.")
-
     args = parser.parse_args()
     main(args)
     

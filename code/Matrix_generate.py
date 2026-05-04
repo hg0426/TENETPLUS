@@ -9,19 +9,9 @@ from code.path_utils import locate_file, resolve_output
 
 def generate_matrices(input_parquet: str, species: str, split_type: str) -> None:
     """Split TE_result_all.parquet into mode- or pair-mode-specific matrices."""
-    # Resolve input; if the requested file is missing, fall back to TE_fast.parquet.
     input_parquet_path = locate_file(input_parquet)
     if not input_parquet_path.exists():
-        fallback = locate_file("TE_fast.parquet")
-        if fallback.exists():
-            print(
-                f"[Matrix_generate] {input_parquet} not found; falling back to {fallback.name}."
-            )
-            input_parquet_path = fallback
-        else:
-            raise FileNotFoundError(
-                f"No TE result file found: tried {input_parquet} and TE_fast.parquet"
-            )
+        raise FileNotFoundError(f"No TE result file found: {input_parquet}")
     gene_names_file = locate_file("gene_names")
 
     # Build a 1-based gene index mapping (id -> name) for joining.

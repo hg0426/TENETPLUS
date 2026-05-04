@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-MODALITY_CHOICES: List[str] = ["none"]
-SCREEN_CHOICES: List[str] = ["kernel"]
-REFINE_CHOICES: List[str] = ["none"]
 PERM_TOGGLE: List[str] = ["off", "on"]
 PERM_FDR_TOGGLE: List[str] = ["off", "on"]
 LOCAL_TE_TOGGLE: List[str] = ["off", "on"]
