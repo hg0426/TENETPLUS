@@ -3,11 +3,11 @@ import os
 import sys
 import time
 
-from code.path_utils import coerce_input_path, coerce_output_path
+from code.path_utils import coerce_input_path, coerce_output_path, locate_file
 
 
 def load_file_to_list(filename, delimiter: str = "\n"):
-    path = coerce_input_path(filename)
+    path = locate_file(filename)
     with open(path, "r", encoding="utf-8") as f:
         return [line.replace(delimiter, "") for line in f]
 

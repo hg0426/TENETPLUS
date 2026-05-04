@@ -69,13 +69,21 @@ def process_matrix(matrix_file: str, trajectory_file: str, cell_select_file: str
     trajectory = pd.read_csv(trajectory_file_path, header=None).squeeze("columns")
     cell_select = pd.read_csv(cell_select_file_path, header=None).squeeze("columns")
 
-    print(len(df))
-    print(len(cell_select))
-
     if len(df) != len(cell_select):
         raise ValueError(
             "The length of CSV file and cell_select file do not match."
         )
+    if len(df) != len(trajectory):
+        raise ValueError(
+            "The length of CSV file and trajectory file do not match."
+        )
+
+    cell_select_mask = pd.to_numeric(cell_select, errors="coerce").fillna(0).eq(1)
+    selected_cells = int(cell_select_mask.sum())
+    print(
+        f"[Matrix] Input cells: {len(df):,}; selected cells: {selected_cells:,}; "
+        f"cell-select entries: {len(cell_select):,}"
+    )
 
     columns_list = df.columns.tolist()
 
@@ -88,11 +96,11 @@ def process_matrix(matrix_file: str, trajectory_file: str, cell_select_file: str
         gene_names_output_path, index=False, header=False
     )
 
-    cell_select.index = df.index
+    cell_select_mask.index = df.index
     trajectory.index = df.index
 
-    filtered_df = df[cell_select == 1]
-    filtered_trajectory = trajectory[cell_select == 1]
+    filtered_df = df[cell_select_mask]
+    filtered_trajectory = trajectory[cell_select_mask]
     trajectory_sorted = filtered_trajectory.sort_values(ascending=True).copy()
     df_sorted = filtered_df.reindex(trajectory_sorted.index)
 
@@ -106,7 +114,7 @@ def process_matrix(matrix_file: str, trajectory_file: str, cell_select_file: str
         for _ in range(len(filtered_df)):
             file.write("1\n")
 
-    print(f"---matrix process time : {time.time() - start_time} seconds ---")
+    print(f"[Matrix] Processing completed in {time.time() - start_time:.2f} seconds.")
 
 
 def main(argv: list[str] | None = None) -> None:

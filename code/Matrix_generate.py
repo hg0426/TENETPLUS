@@ -139,7 +139,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
 
         # rowPeak splits (peak as source)
         if split_type in {"1", "5"} and peak_df is not None:
-            print("Splitting Matrix for TENET_Plus(rowPeak_colGN)")
+            print("[Split] Writing peak->gene TE table: TE_PK_GN.parquet")
             copy_query(
                 """
                 SELECT te.Source, te.Target, te.TE
@@ -151,7 +151,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
             )
 
         if split_type in {"6"} and peak_df is not None:
-            print("Splitting Matrix for TENET_Plus(rowPeak_colPK)")
+            print("[Split] Writing peak->peak TE table: TE_PK_PK.parquet")
             copy_query(
                 """
                 SELECT te.Source, te.Target, te.TE
@@ -164,9 +164,8 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
 
         # rowTF splits (TF as source)
         if split_type != "5" and tf_df is not None:
-            print("Splitting Matrix for rowTF")
             if split_type not in {"3"}:
-                print("Splitting Matrix by colGN")
+                print("[Split] Writing TF->gene TE table: TE_TF_GN.parquet")
                 copy_query(
                     """
                     SELECT te.Source, te.Target, te.TE
@@ -178,7 +177,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                 )
 
             if split_type in {"1", "3", "4"}:
-                print("Splitting Matrix by colPK")
+                print("[Split] Writing TF->peak TE table: TE_TF_PK.parquet")
                 copy_query(
                     """
                     SELECT te.Source, te.Target, te.TE
@@ -189,7 +188,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                     "TE_TF_PK.parquet",
                 )
 
-        print("Matrix splitting completed.")
+        print("[Split] Matrix splitting completed.")
     finally:
         con.close()
 

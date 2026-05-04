@@ -6,7 +6,14 @@
 TARGET_PID=$1
 STAGE_FILE=${2:-}
 GPU_TOGGLE_RAW=${3:-}
-OUTPUT_FILE="system_memory_usage_new.csv"
+OUTPUT_FILE="${MEMORY_MONITOR_OUTPUT:-}"
+if [ -z "$OUTPUT_FILE" ]; then
+    if [ -n "$STAGE_FILE" ]; then
+        OUTPUT_FILE="$(dirname "$STAGE_FILE")/system_memory_usage_new.csv"
+    else
+        OUTPUT_FILE="system_memory_usage_new.csv"
+    fi
+fi
 
 if [ -z "$TARGET_PID" ]; then
     echo "Usage: $0 <target_pid>" >&2

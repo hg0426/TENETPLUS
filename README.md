@@ -1,116 +1,250 @@
 # TENETPLUS
 
-TENETPLUS reconstructs Transfer Entropy (TE)-based causal gene networks from pseudotime-ordered single-cell transcriptomic and epigenetic data, with an emphasis on RNA + ATAC multiome assays (the non-multiome TENET_TF mode is still supported).
+TENETPLUS reconstructs Transfer Entropy (TE)-based causal gene networks from pseudotime-ordered single-cell transcriptomic and epigenetic data, with an emphasis on RNA + ATAC multiome assays. This package provides the current TENETPLUS workflow for kernel-based TE analysis.
 
 ## Method
 
-![tenetplus_workflow](https://github.com/user-attachments/assets/41214b68-41d4-4b8a-9a97-fc7e780efe0e)
+![tenetplus_workflow](docs/tenetplus_workflow.jpg)
 
 ## Citation
 
 Nucleic Acids Research, gkaa1014, https://doi.org/10.1093/nar/gkaa1014  
-https://github.com/neocaleb/TENET
+Original TENET repository: https://github.com/neocaleb/TENET
 
 ## Highlights
-- **Multiome-aware pipeline**: integrates TF->gene, TF->peak, and peak->gene signals while keeping the original TENET_TF flow available.
-- **Modern interface**: `TENET_Plus_for_py.sh` uses interactive prompts but also accepts a full CLI to keep batch workflows reproducible.
-- **Output consistency**: downstream scripts in `code/` build networks (`make_GRN_new.py`), trim indirect edges, and summarize node degrees.
+
+- **Multiome-aware outputs**: supports TF->gene, TF->peak, peak->gene, peak->peak, RNA-only, and all-pair modes.
+- **Fast post-processing**: TE parquet outputs are converted directly into FDR-filtered `.sif` and parquet edge tables.
+- **Clear network files**: FDR network filenames include the split name, e.g. `TE_TF_GN_fdr0.01.sif`.
+- **Focused indirect trimming**: trimming is applied only to TF->gene when enabled; untrimmed FDR networks are always kept.
 
 ## Requirements
+
 - `python3`
-- `openmpi` (>= 4.0 for MPI-backed TE screening)
-- `numpy`, `pandas`, `scipy` (available via PyPI)
-- POSIX shell (the wrapper script lives at the repo root)
+- Python packages listed in `requirements.txt`
 
-## Directory layout
-- `code/`: Python utilities and the main TE estimation helpers.
-- `input/`: place CSV/TSV/RParquet expression matrices, trajectory lists, and cell-select masks here before running TENETPLUS.
-- `output/`: default target for TE matrices and GRN files. The runner creates the directory if it does not already exist.
+Install dependencies with:
 
-## Step 1 - run `TENET_Plus_for_py.sh`
+```bash
+pip install -r requirements.txt
+```
 
-The shell wrapper is the entry point for both multiome and TF-only modes. Launch it without arguments to walk through the guided prompt sequence, or supply the arguments below to run non-interactively.
+## Directory Layout
 
-### Interactive mode
+- `TENET_Plus_for_py.sh`: main runner.
+- `code/`: Python utilities, kernel TE engine, matrix splitting, LocalTE export, FDR network export, and indirect trimming.
+- `input/`: optional place for input matrices, pseudotime files, and cell-select masks.
+- `output/`: default output directory created and used by the runner.
+- `docs/`: workflow figure and documentation assets.
+- `requirements.txt`: Python runtime dependencies.
+
+## Step 1 - Run `TENET_Plus_for_py.sh`
+
+The shell wrapper is the entry point for both multiome and RNA-only kernel TE modes. Launch it without arguments for the guided prompt sequence, or supply the arguments below to run non-interactively.
+
+### Interactive Mode
 
 ```bash
 ./TENET_Plus_for_py.sh
 ```
 
-Prompts ask for the input matrix, number of parallel jobs, trajectory file, cell-select mask, history length (`k`), species, mode code, and advanced knobs such as modality preprocessing, screening estimator, refinement, permutation testing, local TE export, and time subsampling.
+The prompt asks for the input matrix, CPU jobs, trajectory file, cell-select file, history length (`k`), species, output mode, permutation setting, LocalTE storage, and GRN/FDR network export.
 
-### Batch (CLI) usage
-
-```bash
-./TENET_Plus_for_py.sh <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <mode_code> [modality] [screen_mode] [refine_method] [refine_topk] [refine_top_pct] [permute] [perm_n] [perm_topk] [perm_top_pct] [perm_fdr] [perm_q_alpha] [perm_alpha] [store_local_te] [time_stride] [time_pct] [time_seed]
-```
-
-- `history_k`: number of previous timepoints to include (commonly 1 or 2).
-- `mode_code`: see the table below.
-- Optional flags (default in parentheses): `modality` (`auto` for Plus modes, `rna` for TENET_TF; `none` skips preprocessing), `screen_mode` (`kernel`), `refine_method` (`none`), `refine_topk` (0), `refine_top_pct` (0), `permute` (`off`), `perm_n` (100), `perm_topk` (0 = all), `perm_top_pct` (0), `perm_fdr` (`off`), `perm_q_alpha` (0.05), `perm_alpha` (0.01), `store_local_te` (`off`), `time_stride` (1), `time_pct` (100), `time_seed` (42).
-
-### Mode codes
-
-```
-0 - TENET_TF: RNA-only pipeline.
-1 - TENET_Plus: RNA + ATAC, full TE matrix (TF->gene + TF->peak + peak source).
-2 - TENET_Plus rowTF_colGN: only TF -> gene edges.
-3 - TENET_Plus rowTF_colPK: only TF -> peak edges.
-4 - TENET_Plus rowTF_colGN+PK: both TF -> gene and TF -> peak.
-5 - TENET_Plus rowPeak (cis peak-source): builds peak->gene cis interactions.
-6 - TENET_Plus peak->peak (cis): builds local peak->peak networks.
-```
-
-### Environment tunables
-
-Set these environment variables (export before running the script) to tweak local-TE checkpointing and chunking:
-
-- `LOCAL_TE_CHUNK_SIZE` (default 300): number of timepoints processed together.
-- `LOCAL_TE_BUFFER_EDGES` (default 2000): padding per chunk to capture edge effects.
-- `LOCAL_TE_EXPORT_WORKERS` (default 0/`LOCAL_TE_MERGE_WORKERS` is 0): controls multiprocessing during export/merge.
-- `LOCAL_TE_READ_BATCH_ROWS` (default 8192): rows per read call when streaming.
-- `LOCAL_TE_USE_THREADS` (`on`/`off`, default `on`): switch per-chunk threading.
-- `LOCAL_TE_VALUES_DTYPE` (default `float16`): dtype for local TE matrices.
-- `LOCAL_TE_MERGE_WORKERS` (default empty ≈ 0): worker count for merging local TE files.
-- `LOCAL_TE_SPLIT_EXPORT` (`on`): keep per-selector chunk directories (useful when supplying cell-select files).
-- `LOCAL_TE_SPLIT_OUTPUT_DIR` (default `local_te_split_chunks`): destination for split exports.
-
-### Output files
-
-All TE matrix outputs are placed under `output/` (or the path you provide via `OUTPUT_DIR`). The full run produces:
-
-- `TE_result_matrix_rowTF_colPK.txt`
-- `TE_result_matrix_rowTF_colGN.txt`
-- `TE_result_matrix_rowPeak_colGN.txt`
-- `TE_result_matrix.txt` (summary of all modes)
-
-Each file can feed into the GRN reconstruction steps below.
-
-## Step 2 - reconstruct the GRN
-
-Use `code/make_GRN_new.py` to convert TE matrices into graph edge lists:
+### Batch Usage
 
 ```bash
-python code/make_GRN_new.py TE_result_matrix_rowTF_colGN.txt 0.01
-python code/make_GRN_new.py TE_result_matrix_rowTF_colPK.txt 0.01
+./TENET_Plus_for_py.sh \
+  <input_matrix> \
+  <num_jobs> \
+  <trajectory_file> \
+  <cell_select_file> \
+  <history_k> \
+  <species> \
+  <network_mode>
 ```
 
-The second argument is the TE cutoff (e.g., 0.01). Outputs have names like `TE_result_matrix_rowTF_colGN.fdr0.01.sif`.
-
-## Step 3 - trim indirect edges (TENET original step)
+Example:
 
 ```bash
-python code/trim_indirect.py TE_result_matrix_rowTF_colGN.fdr0.01.sif -0.01
+./TENET_Plus_for_py.sh \
+  input/merged_expression_data.csv \
+  32 \
+  input/trajectory.txt \
+  input/cell_select.txt \
+  1 human 1
 ```
 
-`trim_indirect.py` removes redundant edges. The cutoff is typically between -0.1 and 0.1; use the same value you found suitable in previous TENET releases.
+The compact command above runs the included example dataset with the current defaults: kernel TE, no refinement, no permutation, no LocalTE storage, FDR network export on, and TF->gene indirect trimming on.
 
-## Step 4 - summarize degrees
+### Extended CLI
+
+For scripts that need explicit toggles, the full positional form is:
 
 ```bash
-python code/countOutdegree.py TE_result_matrix_rowTF_colPK.fdr0.01.sif
-python code/countOutdegree.py TE_result_matrix_rowTF_colGN.fdr0.01.trimIndirect-0.01.sif
+./TENET_Plus_for_py.sh <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode> [none] [kernel] [none] [0] [0] [permute] [perm_n] [0] [0] [perm_fdr] [perm_q_alpha] [perm_alpha] [store_local_te] [1] [100] [42] [results_buffer_rows]
 ```
 
-Each run writes `<network>.outdegree.txt`.
+In this package, `screen_mode` must be `kernel` and `refine_method` must be `none`.
 
+## Network Modes
+
+```text
+0 - RNA-only TENET_TF.
+1 - TENET_Plus full: TF->gene, TF->peak, peak->gene.
+2 - TF->gene only.
+3 - TF->peak only.
+4 - TF->gene + TF->peak.
+5 - peak->gene (cis).
+6 - peak->peak (cis).
+7 - RNA-only every gene -> every gene.
+8 - every gene -> every gene.
+9 - every gene/peak -> every gene/peak.
+```
+
+Modes `7`, `8`, and `9` are exhaustive all-pair modes and can be very large.
+
+## Step 2 - TE Outputs
+
+By default, TE outputs are written under `output/`. To isolate large runs or keep multiple runs side by side, set `TENET_OUTPUT_DIR`:
+
+```bash
+TENET_OUTPUT_DIR=/path/to/run_output ./TENET_Plus_for_py.sh ...
+```
+
+Relative `TENET_OUTPUT_DIR` values are resolved from the package root. Depending on the selected mode, the runner writes parquet tables such as:
+
+- `TE_result_all.parquet`: full TE result table before split export.
+- `TE_TF_GN.parquet`: TF->gene TE table.
+- `TE_TF_PK.parquet`: TF->peak TE table.
+- `TE_PK_GN.parquet`: peak->gene TE table.
+- `TE_PK_PK.parquet`: peak->peak TE table.
+- `TE_GN_GN.parquet`: gene->gene TE table.
+- `TE_all_features.parquet`: all-feature TE table.
+
+Each TE parquet table uses `Source`, `Target`, and `TE` columns. Permutation and LocalTE runs add their own output files when enabled.
+
+## Step 3 - Reconstruct FDR Networks
+
+By default, `TENET_Plus_for_py.sh` converts the selected TE outputs into FDR-filtered network files immediately after TE calculation.
+
+For mode `1`, typical outputs are:
+
+```text
+output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.parquet
+output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.sif
+output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.trimIndirect-0.01.sif
+output/network_TE_TF_PK_fdr0.01/TE_TF_PK_fdr0.01.parquet
+output/network_TE_TF_PK_fdr0.01/TE_TF_PK_fdr0.01.sif
+output/network_TE_PK_GN_fdr0.01/TE_PK_GN_fdr0.01.parquet
+output/network_TE_PK_GN_fdr0.01/TE_PK_GN_fdr0.01.sif
+output/grn_network_outputs.tsv
+```
+
+The FDR edge parquet files contain only:
+
+```text
+Source, Target, TE
+```
+
+To skip automatic network generation:
+
+```bash
+TENET_MAKE_GRN=off ./TENET_Plus_for_py.sh ...
+```
+
+To change the FDR threshold:
+
+```bash
+TENET_GRN_FDR=0.05 ./TENET_Plus_for_py.sh ...
+```
+
+## Step 4 - Manual FDR Network Export
+
+If you already have a TE parquet table, you can create an FDR network manually:
+
+```bash
+python -m code.network_from_te_parquet \
+  output/TE_TF_GN.parquet \
+  --outdir output/network_TE_TF_GN_fdr0.01 \
+  --output-prefix TE_TF_GN \
+  --fdr 0.01 \
+  --te-cutoff 0 \
+  --threads 32
+```
+
+This writes:
+
+```text
+TE_TF_GN_fdr0.01.parquet
+TE_TF_GN_fdr0.01.sif
+network_summary.txt
+```
+
+## Step 5 - Indirect Trimming
+
+Indirect trimming is optional and controlled by `TENET_TRIM_INDIRECT`.
+
+```bash
+TENET_TRIM_INDIRECT=on  ./TENET_Plus_for_py.sh ...  # default; trim TF->gene only
+TENET_TRIM_INDIRECT=off ./TENET_Plus_for_py.sh ...  # keep only untrimmed FDR networks
+```
+
+Manual trimming:
+
+```bash
+python code/trim_indirect.py \
+  output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.sif \
+  -0.01
+```
+
+This writes:
+
+```text
+TE_TF_GN_fdr0.01.trimIndirect-0.01.sif
+```
+
+The untrimmed `TE_TF_GN_fdr0.01.sif` is always kept.
+
+## Step 6 - Summarize Outdegree
+
+```bash
+python code/countOutdegree.py output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.sif
+python code/countOutdegree.py output/network_TE_TF_GN_fdr0.01/TE_TF_GN_fdr0.01.trimIndirect-0.01.sif
+```
+
+Each command writes `<network>.outdegree.txt`.
+
+## Optional - Permutation
+
+Permutation can be enabled through the extended CLI or the interactive prompt. For faster candidate-restricted permutation, use GRN-FDR candidates:
+
+```bash
+TENET_PERM_CANDIDATE_GRN_FDR=0.01 \
+./TENET_Plus_for_py.sh \
+  <input_matrix> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode> \
+  none kernel none 0 0 on 100
+```
+
+## Optional - LocalTE Storage
+
+LocalTE storage can be enabled interactively or through the extended CLI. It creates larger outputs and can be tuned with:
+
+- `LOCAL_TE_CHUNK_SIZE` (default `300`)
+- `LOCAL_TE_VALUES_DTYPE` (`float16` by default)
+- `LOCAL_TE_SPLIT_EXPORT` (`on` by default)
+- `LOCAL_TE_SPLIT_OUTPUT_DIR` (default `local_te_split_chunks`)
+- `LOCAL_TE_MERGE_PARTS` (`off` by default; keeps equivalent worker-part datasets instead of merging them into one chunk file)
+
+Most users only need to set `<num_jobs>` in the main command. LocalTE export automatically uses that value:
+
+- `LOCAL_TE_EXPORT_WORKERS=auto` means `min(<num_jobs>, 16)`
+- `LOCAL_TE_MERGE_WORKERS=auto` means `min(<num_jobs>, 32)`
+
+Set `LOCAL_TE_MERGE_PARTS=on` only when you need the older single-file-per-chunk layout (`chunk_0000.parquet`, etc.). The default `off` avoids the expensive merge step and is faster/lower-memory for large LocalTE outputs.
+
+Advanced tuning is still available through environment variables when needed:
+
+- `LOCAL_TE_ADVANCED=on` exposes buffer/worker/read settings in interactive mode
+- `LOCAL_TE_BUFFER_EDGES` (default `10000`)
+- `LOCAL_TE_READ_BATCH_ROWS` (default `8192`)
+- `LOCAL_TE_USE_THREADS` (`on` by default)

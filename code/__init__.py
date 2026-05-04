@@ -5,6 +5,7 @@ Provides a central place to locate project directories so that scripts
 can reliably reference data after the repository restructure.
 """
 
+import os
 from pathlib import Path
 
 
@@ -25,6 +26,10 @@ def input_dir() -> Path:
 
 def output_dir() -> Path:
     """Return the path to the output directory."""
+    configured = os.getenv("TENET_OUTPUT_DIR")
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else project_root() / path
     return project_root() / "output"
 
 

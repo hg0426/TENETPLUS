@@ -1,51 +1,42 @@
-"""Enumerations of interactive options for TENET_Plus_for_py.sh."""
+"""Kernel-only interactive options for TENETPLUS_KERNEL."""
 
 from __future__ import annotations
 
 from typing import Dict, List
 
-MODALITY_CHOICES: List[str] = ["rna", "atac", "auto", "none"]
-SCREEN_CHOICES: List[str] = [
-    "linear",
-    "poly",
-    "ksg",
-    "kernel",
-    "gcmi",
-    "disc",
-    "ordinal",
-    "kernel_grid",
-]
-REFINE_CHOICES: List[str] = ["none", "kernel", "ksg"]
+MODALITY_CHOICES: List[str] = ["none"]
+SCREEN_CHOICES: List[str] = ["kernel"]
+REFINE_CHOICES: List[str] = ["none"]
 PERM_TOGGLE: List[str] = ["off", "on"]
 PERM_FDR_TOGGLE: List[str] = ["off", "on"]
 LOCAL_TE_TOGGLE: List[str] = ["off", "on"]
 TENET_MODE_DETAILS = {
     "0": {
         "name": "TENET_TF (RNA only)",
-        "description": "Runs the original TENET pipeline using only RNA expression data.",
+        "description": "Runs the RNA-only TENET TF pair workflow with kernel TE.",
     },
     "1": {
-        "name": "TENET_Plus (RNA + ATAC, full matrix)",
-        "description": "Generates both TF→gene and TF→peak edges, including peak-source integration.",
+        "name": "TENET_Plus full",
+        "description": "Generates TF->gene, TF->peak, and peak->gene outputs.",
     },
     "2": {
-        "name": "TENET_Plus rowTF_colGN",
-        "description": "Outputs only TF (rows) to gene (columns) edges from TENET_Plus.",
+        "name": "TF->gene",
+        "description": "Outputs only TF to gene edges.",
     },
     "3": {
-        "name": "TENET_Plus rowTF_colPK",
-        "description": "Outputs only TF (rows) to peak (columns) edges from TENET_Plus.",
+        "name": "TF->peak",
+        "description": "Outputs only TF to peak edges.",
     },
     "4": {
-        "name": "TENET_Plus rowTF_colGN+PK",
-        "description": "Combines TF→gene and TF→peak matrices for integrated analysis.",
+        "name": "TF->gene + TF->peak",
+        "description": "Combines TF->gene and TF->peak outputs.",
     },
     "5": {
-        "name": "TENET_Plus rowPeak (cis peak-source)",
-        "description": "Builds peak→gene cis interactions using peak windows and gene proximity.",
+        "name": "peak->gene (cis)",
+        "description": "Builds peak->gene cis interactions.",
     },
     "6": {
-        "name": "TENET_Plus peak→peak (cis)",
-        "description": "Builds cis peak→peak interaction network constrained by genomic distance.",
+        "name": "peak->peak (cis)",
+        "description": "Builds cis peak->peak interactions.",
     },
 }  # type: Dict[str, Dict[str, str]]

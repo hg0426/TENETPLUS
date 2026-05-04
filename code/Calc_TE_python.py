@@ -669,6 +669,90 @@ def _radius_counts_sklearn(tree: KDTree, points: np.ndarray, r: float):
     return tree.query_radius(points, r=r, count_only=True), None
 
 
+def _chebyshev_adjacency(points: np.ndarray) -> np.ndarray:
+    """Exact dense Chebyshev-radius adjacency for modest timepoint counts."""
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim == 1:
+        points = points.reshape(-1, 1)
+    n, dim = points.shape
+    mask = np.ones((n, n), dtype=bool)
+    for col in range(dim):
+        vals = points[:, col]
+        mask &= np.abs(vals[:, None] - vals[None, :]) <= 1.0
+    return mask
+
+
+def _packbits_word64(block: np.ndarray, n_cols: int) -> np.ndarray:
+    """Pack boolean rows into uint64 words for faster exact popcount."""
+    packed_u8 = np.packbits(block, axis=1, bitorder="little")
+    byte_cols = (int(n_cols) + 7) // 8
+    word_cols = (byte_cols + 7) // 8
+    if packed_u8.shape[1] != word_cols * 8:
+        padded = np.zeros((packed_u8.shape[0], word_cols * 8), dtype=np.uint8)
+        padded[:, :packed_u8.shape[1]] = packed_u8
+        packed_u8 = padded
+    return np.ascontiguousarray(packed_u8).view(np.uint64)
+
+
+def _chebyshev_adjacency_packed(points: np.ndarray, block_rows: int = 512) -> tuple[np.ndarray, np.ndarray]:
+    """Exact packed Chebyshev adjacency plus row counts, built in row blocks."""
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim == 1:
+        points = points.reshape(-1, 1)
+    n, dim = points.shape
+    packed_cols = (((n + 7) // 8) + 7) // 8
+    if (
+        dim == 1
+        and n > 0
+        and str(os.getenv("TE_KERNEL_GROUPED_PACKED_1D", "on")).lower()
+        not in ("off", "0", "false", "no")
+    ):
+        vals = np.ascontiguousarray(points[:, 0])
+        unique_vals, inverse = np.unique(vals, return_inverse=True)
+        # Exact shortcut for sparse/discrete single-cell features: rows with
+        # the same scaled value have identical 1D Chebyshev-neighborhood masks.
+        # Build each unique row once, then expand back to observation rows.
+        if unique_vals.size < n:
+            unique_packed = np.empty((unique_vals.size, packed_cols), dtype=np.uint64)
+            unique_counts = np.empty(unique_vals.size, dtype=np.int32)
+            block_rows = max(1, int(block_rows))
+            for start in range(0, unique_vals.size, block_rows):
+                end = min(start + block_rows, unique_vals.size)
+                block = np.abs(unique_vals[start:end, None] - vals[None, :]) <= 1.0
+                unique_counts[start:end] = block.sum(axis=1, dtype=np.int32)
+                unique_packed[start:end] = _packbits_word64(block, n)
+            return np.ascontiguousarray(unique_packed[inverse]), unique_counts[inverse].astype(np.int32, copy=False)
+    packed = np.empty((n, packed_cols), dtype=np.uint64)
+    counts = np.empty(n, dtype=np.int32)
+    block_rows = max(1, int(block_rows))
+    for start in range(0, n, block_rows):
+        end = min(start + block_rows, n)
+        block = np.ones((end - start, n), dtype=bool)
+        for col in range(dim):
+            vals = points[:, col]
+            block &= np.abs(vals[start:end, None] - vals[None, :]) <= 1.0
+        counts[start:end] = block.sum(axis=1, dtype=np.int32)
+        packed[start:end] = _packbits_word64(block, n)
+    return packed, counts
+
+
+def _packed_row_counts(mask_packed: np.ndarray, source_ok_packed: np.ndarray) -> np.ndarray:
+    """Exact row-wise popcount of two packed boolean matrices."""
+    return np.bitwise_count(np.bitwise_and(mask_packed, source_ok_packed)).sum(axis=1, dtype=np.int32)
+
+
+def _packed_row_counts_many(mask_packed: np.ndarray, source_ok_packed_stack: np.ndarray) -> np.ndarray:
+    """Exact row-wise popcount for several packed source masks at once."""
+    return np.bitwise_count(
+        np.bitwise_and(source_ok_packed_stack, mask_packed[None, :, :])
+    ).sum(axis=2, dtype=np.int32)
+
+
+def _packed_row_counts_self(mask_packed: np.ndarray) -> np.ndarray:
+    """Exact row counts for one packed boolean matrix."""
+    return np.bitwise_count(mask_packed).sum(axis=1, dtype=np.int32)
+
+
 def prepare_dest_context(
     dest_series: np.ndarray,
     k: int,
@@ -721,8 +805,34 @@ def prepare_dest_context(
                             out=np.zeros_like(dest_next_values.reshape(-1, 1), dtype=float),
                             where=kw_dest_next != 0)
 
-    # Build trees in selected backend
-    if backend == "ckdtree":
+    # Build reusable destination-only structures in the selected backend.
+    if backend == "dense":
+        X_past_next = np.hstack((scaled_past, scaled_next))
+        if hasattr(np, "bitwise_count"):
+            dense_past_packed, count_past = _chebyshev_adjacency_packed(scaled_past)
+            if scaled_past.shape[1] == 1:
+                # For k=1, (past,next) neighborhoods are exactly the
+                # intersection of two one-dimensional Chebyshev masks.  Reuse
+                # the past mask rather than rebuilding the past comparison.
+                dense_next_packed, _ = _chebyshev_adjacency_packed(scaled_next)
+                dense_next_past_packed = np.bitwise_and(dense_past_packed, dense_next_packed)
+                count_next_past = _packed_row_counts_self(dense_next_past_packed)
+            else:
+                dense_next_past_packed, count_next_past = _chebyshev_adjacency_packed(X_past_next)
+            dense_past = None
+            dense_next_past = None
+        else:
+            dense_past = _chebyshev_adjacency(scaled_past)
+            dense_next_past = _chebyshev_adjacency(X_past_next)
+            dense_past_packed = None
+            dense_next_past_packed = None
+            count_past = dense_past.sum(axis=1, dtype=np.int32)
+            count_next_past = dense_next_past.sum(axis=1, dtype=np.int32)
+        tree_past = None
+        tree_past_next = None
+        neighbors_past = None
+        neighbors_past_next = None
+    elif backend == "ckdtree":
         tree_past = CKDTree(scaled_past, leafsize=64)
         X_past_next = np.hstack((scaled_past, scaled_next))
         tree_past_next = CKDTree(X_past_next, leafsize=64)
@@ -731,6 +841,8 @@ def prepare_dest_context(
         if not precompute_neighbors:
             neighbors_past = None
             neighbors_past_next = None
+        dense_past_packed = None
+        dense_next_past_packed = None
     else:
         tree_past = KDTree(scaled_past, metric='chebyshev')
         X_past_next = np.hstack((scaled_past, scaled_next))
@@ -739,6 +851,8 @@ def prepare_dest_context(
         count_next_past, _ = _radius_counts_sklearn(tree_past_next, X_past_next, r=1.0)
         neighbors_past = None
         neighbors_past_next = None
+        dense_past_packed = None
+        dense_next_past_packed = None
 
     return {
         'N': N,
@@ -754,6 +868,10 @@ def prepare_dest_context(
         'count_next_past': count_next_past,
         'neighbors_past': neighbors_past,
         'neighbors_past_next': neighbors_past_next,
+        'dense_past': dense_past if backend == "dense" else None,
+        'dense_next_past': dense_next_past if backend == "dense" else None,
+        'dense_past_packed': dense_past_packed,
+        'dense_next_past_packed': dense_next_past_packed,
         'backend': backend,
         'workers': workers,
     }
@@ -765,6 +883,9 @@ def compute_te_for_sources_with_context(
     reuse_dest_neighbors: bool = False,
     dense_threshold: int = 250,
     return_local: bool = False,
+    scaled_sources: List[np.ndarray] | None = None,
+    source_ok_packed: List[np.ndarray] | None = None,
+    packed_vector_block: int = 1,
 ) -> List[float] | tuple[List[float], List[np.ndarray]]:
     """
     Compute TE values for multiple sources using a precomputed destination context.
@@ -782,6 +903,10 @@ def compute_te_for_sources_with_context(
     count_next_past = ctx['count_next_past']
     backend = ctx.get('backend', 'ckdtree')
     workers = int(ctx.get('workers', 1))
+    dense_past = ctx.get('dense_past') if backend == 'dense' else None
+    dense_next_past = ctx.get('dense_next_past') if backend == 'dense' else None
+    dense_past_packed = ctx.get('dense_past_packed') if backend == 'dense' else None
+    dense_next_past_packed = ctx.get('dense_next_past_packed') if backend == 'dense' else None
 
     neighbors_past = ctx.get('neighbors_past') if reuse_dest_neighbors else None
     neighbors_past_next = ctx.get('neighbors_past_next') if reuse_dest_neighbors else None
@@ -795,25 +920,101 @@ def compute_te_for_sources_with_context(
     avg_nbr = max(float(np.mean(count_past)), float(np.mean(count_next_past)))
     prefer_per_source_tree = (avg_nbr >= dense_threshold) or (not reuse_dest_neighbors)
 
-    for src in sources:
-        if len(src) != N:
-            te_values.append(0.0)
-            continue
-        source_values = np.asarray(src, dtype=float)[k - 1:-1]
-        if normalise:
-            epsilon = 1e-9
-            std_source = np.std(source_values, ddof=1)
-            kw_source = kernel_width * (std_source + epsilon)
-        else:
-            kw_source = float(kernel_width)
+    if scaled_sources is None:
+        scaled_sources_iter = [None] * len(sources)
+    else:
+        scaled_sources_iter = scaled_sources
+    if source_ok_packed is None:
+        source_ok_packed_iter = [None] * len(sources)
+    else:
+        source_ok_packed_iter = source_ok_packed
 
-        scaled_source_1d = np.divide(
-            source_values.astype(float), kw_source,
-            out=np.zeros_like(source_values, dtype=float),
-            where=(kw_source != 0)
+    packed_vector_block = max(1, int(packed_vector_block or 1))
+    i_src = 0
+    while i_src < len(sources):
+        src = sources[i_src]
+        scaled_source_cached = scaled_sources_iter[i_src]
+        source_ok_packed_cached = source_ok_packed_iter[i_src]
+
+        can_vectorise_packed = (
+            not return_local
+            and packed_vector_block > 1
+            and backend == 'dense'
+            and dense_past_packed is not None
+            and dense_next_past_packed is not None
+            and source_ok_packed_cached is not None
         )
+        if can_vectorise_packed:
+            block_masks = []
+            while (
+                i_src + len(block_masks) < len(sources)
+                and len(block_masks) < packed_vector_block
+                and source_ok_packed_iter[i_src + len(block_masks)] is not None
+            ):
+                block_masks.append(np.asarray(source_ok_packed_iter[i_src + len(block_masks)]))
 
-        if (not prefer_per_source_tree) and reuse_dest_neighbors and (neighbors_past is not None) and (neighbors_past_next is not None):
+            if block_masks:
+                source_stack = np.stack(block_masks, axis=0)
+                count_past_source_many = _packed_row_counts_many(dense_past_packed, source_stack)
+                count_next_past_source_many = _packed_row_counts_many(dense_next_past_packed, source_stack)
+                for row in range(count_past_source_many.shape[0]):
+                    count_past_source = count_past_source_many[row]
+                    count_next_past_source = count_next_past_source_many[row]
+                    valid = (count_past_source > 0) & (count_past > 0) & (count_next_past > 0)
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        numerator = count_next_past_source[valid] / count_past_source[valid]
+                        denominator = count_next_past[valid] / count_past[valid]
+                        log_terms = np.log(numerator / denominator)
+                        log_terms = np.where(np.isfinite(log_terms), log_terms, 0.0)
+                    te_values.append(float(np.sum(log_terms)) / total_obs / LOG2)
+                i_src += len(block_masks)
+                continue
+
+        if scaled_source_cached is None:
+            if len(src) != N:
+                te_values.append(0.0)
+                i_src += 1
+                continue
+            source_values = np.asarray(src, dtype=float)[k - 1:-1]
+            if normalise:
+                epsilon = 1e-9
+                std_source = np.std(source_values, ddof=1)
+                kw_source = kernel_width * (std_source + epsilon)
+            else:
+                kw_source = float(kernel_width)
+
+            scaled_source_1d = np.divide(
+                source_values.astype(float), kw_source,
+                out=np.zeros_like(source_values, dtype=float),
+                where=(kw_source != 0)
+            )
+        else:
+            scaled_source_1d = np.asarray(scaled_source_cached, dtype=float)
+            if scaled_source_1d.shape[0] != total_obs:
+                te_values.append(0.0)
+                i_src += 1
+                continue
+
+        if backend == 'dense' and (
+            (dense_past_packed is not None and dense_next_past_packed is not None)
+            or (dense_past is not None and dense_next_past is not None)
+        ):
+            if (
+                source_ok_packed_cached is not None
+                and dense_past_packed is not None
+                and dense_next_past_packed is not None
+            ):
+                count_past_source = _packed_row_counts(dense_past_packed, source_ok_packed_cached)
+                count_next_past_source = _packed_row_counts(dense_next_past_packed, source_ok_packed_cached)
+            elif dense_past_packed is not None and dense_next_past_packed is not None:
+                source_ok_packed_cached, _ = _chebyshev_adjacency_packed(scaled_source_1d)
+                count_past_source = _packed_row_counts(dense_past_packed, source_ok_packed_cached)
+                count_next_past_source = _packed_row_counts(dense_next_past_packed, source_ok_packed_cached)
+            else:
+                source_ok = np.abs(scaled_source_1d[:, None] - scaled_source_1d[None, :]) <= 1.0
+                count_past_source = np.logical_and(dense_past, source_ok).sum(axis=1, dtype=np.int32)
+                count_next_past_source = np.logical_and(dense_next_past, source_ok).sum(axis=1, dtype=np.int32)
+        elif (not prefer_per_source_tree) and reuse_dest_neighbors and (neighbors_past is not None) and (neighbors_past_next is not None):
             if njit is not None:
                 indptr_past, indices_past = _neighbors_to_csr(neighbors_past)
                 indptr_pn, indices_pn = _neighbors_to_csr(neighbors_past_next)
@@ -861,6 +1062,7 @@ def compute_te_for_sources_with_context(
             if np.any(valid):
                 local_bits[valid] = log_terms / LOG2
             local_values.append(local_bits)
+        i_src += 1
 
     if return_local and local_values is not None:
         return te_values, local_values

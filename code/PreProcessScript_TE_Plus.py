@@ -22,7 +22,7 @@ def load_gene_chr_mapping(filename):
 
 def load_file_to_list(filename, delimiter: str = "\n"):
     """Load a file into a list, stripping trailing newlines."""
-    path = coerce_input_path(filename)
+    path = locate_file(filename)
     with open(path, "r", encoding="utf-8") as f:
         return [line.replace(delimiter, "") for line in f]
 
@@ -248,7 +248,7 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
             genes_per_chromosome.setdefault(chromosome, []).append(gene)
 
     if sif_file:
-        print("using Triplet pairs")
+        print("[Pairs] Using triplet/SIF-derived pairs.")
         tf_gene_pairs, tf_peak_pairs, peak_gene_pairs = load_sif_connections(
             sif_file, gene_names_dict
         )
@@ -257,7 +257,7 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
         peak_gene_pairs = list(set(peak_gene_pairs))
         gene_pairs_indices = tf_gene_pairs + tf_peak_pairs + peak_gene_pairs
     else:
-        print("Make pairs")
+        print("[Pairs] Creating TENET+ candidate pairs.")
         if mode == "1":
             gene_pairs_indices = create_TENET_Plus_pairs(
                 Peaks, genes_per_chromosome, gene_names_dict, tf_list
@@ -289,7 +289,10 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
         writer = csv.writer(f)
         writer.writerows(gene_pairs_indices)
 
-    print(f"--- Preprocess time: {time.time() - start_time:.2f} seconds ---")
+    print(
+        f"[Pairs] Wrote {len(gene_pairs_indices):,} pairs to all_pairs.csv "
+        f"in {time.time() - start_time:.2f} seconds."
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
