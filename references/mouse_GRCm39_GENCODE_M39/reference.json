@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "species": "Mus musculus",
+  "assembly": "GRCm39",
+  "assembly_unit": "all",
+  "annotation_release": "GENCODE M39 (Ensembl 116), primary assembly",
+  "format": "gtf",
+  "sources": {
+    "annotation": {
+      "sha256": "d6da97913ce30f99883fc1216b111569f9947cf203886a5afb607b59228574d4",
+      "url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M39/gencode.vM39.primary_assembly.annotation.gtf.gz",
+      "filename": "gencode.vM39.primary_assembly.annotation.gtf.gz"
+    },
+    "assembly_report": {
+      "sha256": "e3fb259bf1d1ee3b646c1f697a39c8394a6342d790fca9c1b36a8c873063ae26",
+      "filename": "GCF_000001635.27_assembly_report.txt"
+    }
+  },
+  "mapping_style": "identifiers",
+  "annotation_headers": [
+    "##description: evidence-based annotation of the mouse genome (GRCm39), version M39 (Ensembl 116)",
+    "##provider: GENCODE",
+    "##contact: gencode-help@ebi.ac.uk",
+    "##format: gtf",
+    "##date: 2026-04-09"
+  ],
+  "gene_records_read": 8424131,
+  "gene_identifiers": 156393,
+  "contigs": 61,
+  "multi_contig_identifiers": 1,
+  "files": {
+    "gene_chr.txt": "e5c0be6bb811b288ab4fbee4058dfe345bf477747238f6be7773cc2a4f3e6655",
+    "contigs.json": "53f416b69f02ea3237998b72980d6ac2d701ad085bac2bcb73d58e4f44c0d597"
+  }
+}

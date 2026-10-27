@@ -87,11 +87,7 @@ def process_matrix(matrix_file: str, trajectory_file: str, cell_select_file: str
 
     columns_list = df.columns.tolist()
 
-    gene_names_input_path = coerce_input_path("gene_names")
     gene_names_output_path = coerce_output_path("gene_names")
-    pd.DataFrame(columns_list).to_csv(
-        gene_names_input_path, index=False, header=False
-    )
     pd.DataFrame(columns_list).to_csv(
         gene_names_output_path, index=False, header=False
     )

@@ -1,0 +1,119 @@
+{
+  "species": {
+    "human": {
+      "bundle": "human_GRCh38_GENCODE_v44_legacy",
+      "species": "Homo sapiens",
+      "assembly": "GRCh38.p14",
+      "release": "GENCODE v44 (Ensembl 110), legacy gene-name rows",
+      "format": "gtf",
+      "mapping_style": "gene-symbol-rows",
+      "sources": {
+        "annotation": {
+          "sha256": "01f817afed65feee863361b4baf30a95e722ee5c5d508ff77b04106ef7ba20d3",
+          "url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/gencode.v44.annotation.gtf.gz",
+          "filename": "gencode.v44.annotation.gtf.gz"
+        }
+      }
+    },
+    "mouse": {
+      "bundle": "mouse_GRCm39_GENCODE_M39",
+      "species": "Mus musculus",
+      "assembly": "GRCm39",
+      "release": "GENCODE M39 (Ensembl 116), primary assembly",
+      "format": "gtf",
+      "mapping_style": "identifiers",
+      "sources": {
+        "annotation": {
+          "sha256": "d6da97913ce30f99883fc1216b111569f9947cf203886a5afb607b59228574d4",
+          "url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M39/gencode.vM39.primary_assembly.annotation.gtf.gz",
+          "filename": "gencode.vM39.primary_assembly.annotation.gtf.gz"
+        },
+        "assembly_report": {
+          "sha256": "e3fb259bf1d1ee3b646c1f697a39c8394a6342d790fca9c1b36a8c873063ae26",
+          "filename": "GCF_000001635.27_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/635/GCF_000001635.27_GRCm39/GCF_000001635.27_GRCm39_assembly_report.txt"
+        }
+      }
+    },
+    "zebrafish": {
+      "bundle": "zebrafish_GCF_052040795.2_RefSeq",
+      "species": "Danio rerio",
+      "assembly": "GRCz13ab",
+      "release": "GCF_052040795.2-RS_2026_08",
+      "format": "gff3",
+      "mapping_style": "identifiers",
+      "sources": {
+        "annotation": {
+          "sha256": "763dda46efd9a65c05af78005df43cbb0a30e6abf6af03b61fdb5cb432cc9376",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/052/040/795/GCF_052040795.2_GRCz13ab/GCF_052040795.2_GRCz13ab_genomic.gff.gz",
+          "filename": "GCF_052040795.2_genomic.gff.gz"
+        },
+        "assembly_report": {
+          "sha256": "4c29fe88d55ac26c64cc6b0c7e6a75f636ed95547b87a115e1a9820709d10ff0",
+          "filename": "GCF_052040795.2_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/052/040/795/GCF_052040795.2_GRCz13ab/GCF_052040795.2_GRCz13ab_assembly_report.txt"
+        }
+      }
+    },
+    "fly": {
+      "bundle": "fly_GCF_000001215.4_RefSeq",
+      "species": "Drosophila melanogaster",
+      "assembly": "Release 6 plus ISO1 MT",
+      "release": "FlyBase Release 6.54",
+      "format": "gff3",
+      "mapping_style": "identifiers",
+      "sources": {
+        "annotation": {
+          "sha256": "9a372f10f86f4fe4222d070a101716b7565affdd6cb96efae249e8afa3b2c726",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/215/GCF_000001215.4_Release_6_plus_ISO1_MT/GCF_000001215.4_Release_6_plus_ISO1_MT_genomic.gff.gz",
+          "filename": "GCF_000001215.4_genomic.gff.gz"
+        },
+        "assembly_report": {
+          "sha256": "22bf2cefea3bf4abc56aab340bdfb32f27dcd02b78f57c0762f8f1036e7963e7",
+          "filename": "GCF_000001215.4_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/215/GCF_000001215.4_Release_6_plus_ISO1_MT/GCF_000001215.4_Release_6_plus_ISO1_MT_assembly_report.txt"
+        }
+      }
+    },
+    "worm": {
+      "bundle": "worm_GCF_000002985.6_RefSeq",
+      "species": "Caenorhabditis elegans",
+      "assembly": "WBcel235",
+      "release": "WormBase WS298",
+      "format": "gff3",
+      "mapping_style": "identifiers",
+      "sources": {
+        "annotation": {
+          "sha256": "054c0970f5210aa1c580922561456fdce89c66b7b371df1e5b737dff8a94b549",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/002/985/GCF_000002985.6_WBcel235/GCF_000002985.6_WBcel235_genomic.gff.gz",
+          "filename": "GCF_000002985.6_genomic.gff.gz"
+        },
+        "assembly_report": {
+          "sha256": "bdbf9fd4cb2961859b1fe6fdaa0349f62e93fa8d13dbcd4f044409e35c7e3dbe",
+          "filename": "GCF_000002985.6_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/002/985/GCF_000002985.6_WBcel235/GCF_000002985.6_WBcel235_assembly_report.txt"
+        }
+      }
+    },
+    "rat": {
+      "bundle": "rat_GCF_036323735.1_RefSeq",
+      "species": "Rattus norvegicus",
+      "assembly": "GRCr8",
+      "release": "GCF_036323735.1-RS_2026_08",
+      "format": "gff3",
+      "mapping_style": "identifiers",
+      "sources": {
+        "annotation": {
+          "sha256": "fbb27c7cf14deae80d24959449d4b1c6f58f0ac3dd188f3e00da21081b259901",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/036/323/735/GCF_036323735.1_GRCr8/GCF_036323735.1_GRCr8_genomic.gff.gz",
+          "filename": "GCF_036323735.1_genomic.gff.gz"
+        },
+        "assembly_report": {
+          "sha256": "20a1ff05e11bb5a1bbe8df674ccad3c2d79de627bd08b529c192bb7c2e6ba48a",
+          "filename": "GCF_036323735.1_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/036/323/735/GCF_036323735.1_GRCr8/GCF_036323735.1_GRCr8_assembly_report.txt"
+        }
+      }
+    }
+  }
+}

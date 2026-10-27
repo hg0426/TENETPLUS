@@ -1,8 +1,11 @@
-numpy
-pandas
-scipy
-tqdm
-duckdb
-pyarrow
-numba
-scikit-learn
+# Versions used for the Python 3.10 validation environment.
+numpy==1.26.0
+pandas==2.2.2
+scipy==1.12.0
+tqdm==4.66.5
+duckdb==0.10.2
+pyarrow==17.0.0
+numba==0.60.0
+scikit-learn==1.5.1
+matplotlib==3.9.2
+statsmodels==0.14.2

@@ -1,4 +1,6 @@
 import os
+from code.feature_utils import load_peak_names, read_names
+from code.species_support import load_tf_names
 import sys
 
 import duckdb
@@ -12,10 +14,10 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
     input_parquet_path = locate_file(input_parquet)
     if not input_parquet_path.exists():
         raise FileNotFoundError(f"No TE result file found: {input_parquet}")
-    gene_names_file = locate_file("gene_names")
+    gene_names_file = resolve_output("gene_names")
 
     # Build a 1-based gene index mapping (id -> name) for joining.
-    gene_names_df = pd.read_csv(gene_names_file, header=None)
+    gene_names_df = pd.DataFrame(read_names(gene_names_file))
     gene_names_df.reset_index(drop=True, inplace=True)
     gene_names_df.index += 1
     gene_names_df.index.name = "id"
@@ -31,6 +33,26 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
 
         input_str = str(input_parquet_path).replace("'", "''")
 
+        schema = dict((row[0], row[1]) for row in con.execute(
+            f"DESCRIBE SELECT Source, Target FROM read_parquet('{input_str}')").fetchall())
+        integer_types = {'TINYINT','SMALLINT','INTEGER','BIGINT','HUGEINT','UTINYINT','USMALLINT','UINTEGER','UBIGINT'}
+        joins = {}
+        for column in ('Source', 'Target'):
+            if schema[column] in integer_types:
+                joins[column] = f'base.{column} = g.id'
+                invalid = con.execute(f"SELECT count(*) FROM read_parquet('{input_str}') base LEFT JOIN gene_map g ON {joins[column]} WHERE g.id IS NULL").fetchone()[0]
+            elif schema[column] == 'VARCHAR':
+                joins[column] = f'base.{column} = g.list'
+                invalid = con.execute(f"SELECT count(*) FROM read_parquet('{input_str}') base LEFT JOIN gene_map g ON {joins[column]} WHERE g.id IS NULL").fetchone()[0]
+            else:
+                raise ValueError(f'Unsupported endpoint type for {column}: {schema[column]}; use integer IDs or string names')
+            if invalid:
+                raise ValueError(f'{invalid} unknown {column} endpoints')
+        source_join = joins['Source'].replace('g.', 'g_src.')
+        target_join = joins['Target'].replace('g.', 'g_tgt.')
+        # Validate feature identity even for full-pair exports.
+        load_peak_names(gene_names_df['list'].tolist())
+
         def copy_full_matrix(output_filename: str) -> None:
             """Write full Source×Target matrix, mapping indices to names."""
             out_path = resolve_output(output_filename)
@@ -44,9 +66,9 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                         base.TE
                     FROM read_parquet('{input_str}') AS base
                     LEFT JOIN gene_map AS g_src
-                        ON try_cast(base.Source AS BIGINT) = g_src.id
+                        ON {source_join}
                     LEFT JOIN gene_map AS g_tgt
-                        ON try_cast(base.Target AS BIGINT) = g_tgt.id
+                        ON {target_join}
                 )
                 TO '{out_str}'
                 (FORMAT 'parquet')
@@ -81,9 +103,9 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                 base.TE
             FROM read_parquet('{input_str}') AS base
             LEFT JOIN gene_map AS g_src
-                ON try_cast(base.Source AS BIGINT) = g_src.id
+                ON {source_join}
             LEFT JOIN gene_map AS g_tgt
-                ON try_cast(base.Target AS BIGINT) = g_tgt.id
+                ON {target_join}
             """
         )
 
@@ -103,27 +125,13 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
         peak_df = None
         tf_df = None
 
-        # Peak list is required for rowPeak / peak->peak modes.
-        if split_type in {"1", "5", "6"}:
-            peak_list_file = locate_file("TE_peak_list.txt")
-            try:
-                with open(peak_list_file, "r", encoding="utf-8") as file:
-                    peaks = [line.strip() for line in file if line.strip()]
-            except FileNotFoundError:
-                raise FileNotFoundError(f"File not found: {peak_list_file}")
-            peak_df = pd.DataFrame({"name": peaks})
-            con.register("peak_list", peak_df)
+        peaks = sorted(load_peak_names(gene_names_df['list'].tolist(), locate_file('TE_peak_list.txt')))
+        peak_df = pd.DataFrame({'name': pd.Series(peaks, dtype=str)})
+        con.register('peak_list', peak_df)
 
-        # TF list is required for all modes except pure rowPeak (mode 5).
-        if split_type != "5":
-            tf_list_file = locate_file(
-                f"GO_symbol_{species}_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
-            )
-            try:
-                with open(tf_list_file, "r", encoding="utf-8") as file:
-                    tfs = [line.strip() for line in file if line.strip()]
-            except FileNotFoundError:
-                raise FileNotFoundError(f"File not found: {tf_list_file}")
+        # Pure peak-source modes 5/6 do not consume a TF list.
+        if split_type in {"0", "1", "2", "3", "4"}:
+            tfs = load_tf_names(species)
             tf_df = pd.DataFrame({"name": tfs})
             con.register("tf_list", tf_df)
 
@@ -135,7 +143,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                 SELECT te.Source, te.Target, te.TE
                 FROM te_named AS te
                 JOIN peak_list AS pl ON te.Source = pl.name
-                WHERE te.Target NOT LIKE 'chr%'
+                WHERE NOT EXISTS (SELECT 1 FROM peak_list p WHERE p.name = te.Target)
                 """,
                 "TE_PK_GN.parquet",
             )
@@ -147,7 +155,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                 SELECT te.Source, te.Target, te.TE
                 FROM te_named AS te
                 JOIN peak_list AS pl ON te.Source = pl.name
-                WHERE te.Target LIKE 'chr%'
+                WHERE EXISTS (SELECT 1 FROM peak_list p WHERE p.name = te.Target)
                 """,
                 "TE_PK_PK.parquet",
             )
@@ -161,7 +169,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                     SELECT te.Source, te.Target, te.TE
                     FROM te_named AS te
                     JOIN tf_list AS tf ON te.Source = tf.name
-                    WHERE te.Target NOT LIKE 'chr%'
+                    WHERE NOT EXISTS (SELECT 1 FROM peak_list p WHERE p.name = te.Target)
                     """,
                     "TE_TF_GN.parquet",
                 )
@@ -173,7 +181,7 @@ def generate_matrices(input_parquet: str, species: str, split_type: str) -> None
                     SELECT te.Source, te.Target, te.TE
                     FROM te_named AS te
                     JOIN tf_list AS tf ON te.Source = tf.name
-                    WHERE te.Target LIKE 'chr%'
+                    WHERE EXISTS (SELECT 1 FROM peak_list p WHERE p.name = te.Target)
                     """,
                     "TE_TF_PK.parquet",
                 )

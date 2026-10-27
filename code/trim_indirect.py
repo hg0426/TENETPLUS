@@ -63,12 +63,16 @@ def trim_indirect(
 ) -> dict[str, list[bool]]:
     source_set = set(source_order)
     target_te_by_source: dict[str, dict[str, float]] = {}
+    target_indices_by_source: dict[str, dict[str, list[int]]] = {}
     for source in source_order:
         target_te: dict[str, float] = {}
-        for target, te in zip(targets_by_source[source], tes_by_source[source]):
+        target_indices: dict[str, list[int]] = {}
+        for idx, (target, te) in enumerate(zip(targets_by_source[source], tes_by_source[source])):
             if target not in target_te:
                 target_te[target] = te
+            target_indices.setdefault(target, []).append(idx)
         target_te_by_source[source] = target_te
+        target_indices_by_source[source] = target_indices
     indirect_by_source = {
         source: [False] * len(targets_by_source[source])
         for source in source_order
@@ -88,15 +92,20 @@ def trim_indirect(
                 continue
 
             source_middle_te = source_tes[mid_idx]
-            for target_idx, target in enumerate(source_targets):
-                if target_idx == mid_idx:
+            source_target_indices = target_indices_by_source[source]
+            for target, middle_target_te_value in middle_target_te.items():
+                target_indices = source_target_indices.get(target)
+                if not target_indices:
                     continue
                 middle_target_te_value = middle_target_te.get(target)
                 if middle_target_te_value is None:
                     continue
                 cutoff = min(source_middle_te, middle_target_te_value) + threshold
-                if source_tes[target_idx] < cutoff:
-                    source_indirect[target_idx] = True
+                for target_idx in target_indices:
+                    if target_idx == mid_idx:
+                        continue
+                    if source_tes[target_idx] < cutoff:
+                        source_indirect[target_idx] = True
 
     return indirect_by_source
 

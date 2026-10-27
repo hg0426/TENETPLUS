@@ -1,4 +1,4 @@
-"""Kernel-only interactive options for TENETPLUS_KERNEL."""
+"""Kernel-only interactive options for TENETPLUS."""
 
 from __future__ import annotations
 

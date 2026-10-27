@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 import time
+from code.species_support import load_tf_names
 
 from code.path_utils import coerce_input_path, coerce_output_path, locate_file
 
@@ -45,9 +46,7 @@ def run_preprocess(species: str) -> None:
         )
         return
 
-    tf_list = load_file_to_list(
-        f"GO_symbol_{species}_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
-    )
+    tf_list = load_tf_names(species)
     gene_pairs_indices = create_gene_pairs(gene_names_dict, tf_list)
     output_path = coerce_output_path("all_pairs.csv")
     with open(output_path, "w", encoding="utf-8", newline="") as f:

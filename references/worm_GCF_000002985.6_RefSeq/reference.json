@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "species": "Caenorhabditis elegans",
+  "assembly": "WBcel235",
+  "assembly_unit": "all",
+  "annotation_release": "WormBase WS298",
+  "format": "gff3",
+  "sources": {
+    "annotation": {
+      "sha256": "054c0970f5210aa1c580922561456fdce89c66b7b371df1e5b737dff8a94b549",
+      "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/002/985/GCF_000002985.6_WBcel235/GCF_000002985.6_WBcel235_genomic.gff.gz",
+      "filename": "GCF_000002985.6_genomic.gff.gz"
+    },
+    "assembly_report": {
+      "sha256": "bdbf9fd4cb2961859b1fe6fdaa0349f62e93fa8d13dbcd4f044409e35c7e3dbe",
+      "filename": "GCF_000002985.6_assembly_report.txt"
+    }
+  },
+  "mapping_style": "identifiers",
+  "annotation_headers": [
+    "##gff-version 3",
+    "#!gff-spec-version 1.21",
+    "#!processor NCBI annotwriter",
+    "#!genome-build WBcel235",
+    "#!genome-build-accession NCBI_Assembly:GCF_000002985.6",
+    "#!annotation-source WormBase WS298",
+    "##sequence-region NC_003279.8 1 15072434",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_003280.10 1 15279421",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_003281.10 1 13783801",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_003282.8 1 17493829",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_003283.11 1 20924180",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_003284.9 1 17718942",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "##sequence-region NC_001328.1 1 13794",
+    "##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=6239",
+    "###"
+  ],
+  "gene_records_read": 46926,
+  "gene_identifiers": 140754,
+  "contigs": 7,
+  "multi_contig_identifiers": 0,
+  "files": {
+    "gene_chr.txt": "2b16f008ecc185fe5cb66062897aa538df870919245d979317f1d90de9a5c449",
+    "contigs.json": "53b525ba3114ee944ae2802efb07935aea219d35067d11624c8e7dabeccae9d1"
+  }
+}
