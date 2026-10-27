@@ -1,4 +1,5 @@
-print("functions_for_TENET_attached_ver.2024.03.01")
+# TENETPLUS downstream R utilities.
+# Gene coordinates must match the species, assembly, and identifiers of the input.
 library(ggplot2)
 library(pheatmap)
 library(stringr)
@@ -414,12 +415,20 @@ data_count_for_cytoscape <- function(GRN_list,celltype_group=GRN_list){
 }
 
 
-split_mtx_AB <- function(TE_matrix,species){
-  system(paste0("sh /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/function_for_tenetplus/script/getMatrix_rowTF_colGN_AB-matrix.sh ",TE_matrix," ",species))
+# Compatibility entry points for external legacy matrix-splitting scripts.
+# Current Parquet splitting is performed by TENET_Plus_for_py.sh.
+.run_legacy_split <- function(TE_matrix, species, script) {
+  if (!nzchar(script) || !file.exists(script))
+    stop("Supply the legacy split script path; for current Parquet outputs use TENET_Plus_for_py.sh.")
+  status <- system2("sh", c(shQuote(normalizePath(script)), shQuote(TE_matrix), shQuote(species)))
+  if (status != 0L) stop("Legacy matrix splitting failed with exit status ", status)
+  invisible(status)
 }
-
-split_mtx_C <- function(TE_matrix,species){
-  system(paste0("sh /home/Data_Drive_8TB_2/TENET_workshop/TENETPLUS/function_for_tenetplus/script/getMatrix_rowTF_colPK_C-matrix.sh ",TE_matrix," ",species))
+split_mtx_AB <- function(TE_matrix, species, script = Sys.getenv("TENET_LEGACY_SPLIT_AB")) {
+  .run_legacy_split(TE_matrix, species, script)
+}
+split_mtx_C <- function(TE_matrix, species, script = Sys.getenv("TENET_LEGACY_SPLIT_C")) {
+  .run_legacy_split(TE_matrix, species, script)
 }
 
 convertNumberToUnit <- function(x) {
@@ -432,164 +441,192 @@ convertNumberToUnit <- function(x) {
   }
 }
 
-function_PeakSource_Distance <- function(Tenet_result_dir=Tenet_result_dir,
-                                         gene_anno=gene_anno,
-                                         trim_indirect=T,
-                                         trim_distance=1000000,
-                                         save=F,
-                                         rowPeak_colGN=NA,
-                                         gene_list =NA,
-                                         peak_list =NA
-){
-  
-  # Input files -------------------------------------------------------------
-  print(paste0("##### Input files"))
-  print(paste0("- Tenet_result_dir: ",Tenet_result_dir))
-  rowPeak_colGN_file=paste0(Tenet_result_dir,"/TE_result_matrix_rowPeak_colGN.fdr0.01.sif")
-  rowTF_colPK_file=paste0(Tenet_result_dir,"/TE_result_matrix_rowTF_colPK.fdr0.01.sif")
-  if (trim_indirect==T){
-    # Trim indirect 여러개 일수도
-    rowTF_colGN_file=paste0(Tenet_result_dir,"/TE_result_matrix_rowTF_colGN.fdr0.01.trimIndirect-0.01.sif")
-    
-  } else if(trim_indirect==F){
-    rowTF_colGN_file=paste0(Tenet_result_dir,"/TE_result_matrix_rowTF_colGN.fdr0.01.sif")
+function_PeakSource_Distance <- function(Tenet_result_dir = NULL,
+                                        gene_anno = NULL,
+                                        trim_indirect = TRUE,
+                                        trim_distance = 1000000,
+                                        save = FALSE,
+                                        rowPeak_colGN = NA,
+                                        gene_list = NA,
+                                        peak_list = NA,
+                                        fdr = 0.01,
+                                        contig_aliases = NULL) {
+  if (is.null(gene_anno)) stop("Supply gene_anno with matching gene coordinates.")
+  if (length(trim_distance) != 1L || !is.finite(trim_distance) || trim_distance < 0)
+    stop("trim_distance must be a finite non-negative number.")
+  if (length(fdr) != 1L || !is.finite(fdr) || fdr <= 0 || fdr > 1)
+    stop("fdr must be in (0, 1].")
+  alpha <- format(fdr, scientific = FALSE, trim = TRUE)
+  root <- if (is.null(Tenet_result_dir)) NULL else normalizePath(Tenet_result_dir, mustWork = TRUE)
+  manifest_path <- if (!is.null(root)) file.path(root, "grn_network_outputs.tsv") else ""
+  manifest <- if (nzchar(manifest_path) && file.exists(manifest_path))
+    read.delim(manifest_path, check.names = FALSE, stringsAsFactors = FALSE,
+               colClasses = "character", quote = "", comment.char = "") else NULL
+  canonical <- function(x) {
+    x <- as.character(x)
+    if (!is.null(contig_aliases)) {
+      if (is.null(names(contig_aliases)) || anyDuplicated(names(contig_aliases)) ||
+          anyNA(contig_aliases) || anyNA(names(contig_aliases)) ||
+          any(!nzchar(names(contig_aliases))) || any(!nzchar(contig_aliases)))
+        stop("contig_aliases must be a named vector of explicit alias-to-canonical mappings.")
+      i <- match(x, names(contig_aliases)); use <- !is.na(i)
+      x[use] <- as.character(contig_aliases[i[use]])
+    }
+    x
   }
-  if (file.exists(rowPeak_colGN_file)){
-    print(paste0("- rowPeak_colGN_file: ",basename(rowPeak_colGN_file)))
-  } else{
-    print(paste0("- rowPeak_colGN_file not in directory"))
+  matches_threshold <- function(paths, prefix, suffix) {
+    labels <- basename(as.character(paths))
+    valid <- !is.na(labels) & startsWith(labels, prefix) & endsWith(labels, suffix)
+    result <- rep(FALSE, length(labels))
+    idx <- which(valid)
+    values <- suppressWarnings(as.numeric(substring(labels[idx], nchar(prefix) + 1,
+                                                     nchar(labels[idx]) - nchar(suffix))))
+    # The Python Parquet exporter uses six significant digits in filenames.
+    result[idx] <- !is.na(values) & values %in% c(fdr, as.numeric(sprintf("%.6g", fdr)))
+    result
   }
-  if (file.exists(rowTF_colPK_file)){
-    print(paste0("- rowTF_colPK_file: ",basename(rowTF_colPK_file)))
-  } else{
-    print(paste0("- rowTF_colPK_file not in directory"))
-  }
-  if (file.exists(rowTF_colGN_file)){
-    print(paste0("- rowTF_colGN_file: ",basename(rowTF_colGN_file)))
-  } else{
-    print(paste0("- rowTF_colGN_file not in directory"))
-  }
-  cat('\n')
-  
-  # Calculate PeakSource Distance -------------------------------------------------------------
-  print(paste0("##### Calculate PeakSource Distance"))
-  if(class(rowPeak_colGN)!="data.frame"){
-  rowPeak_colGN <- read.delim(paste0(rowPeak_colGN_file),header = F) ; colnames(rowPeak_colGN) <- c("source","score","target")
-  }
-  dim(rowPeak_colGN) ; head(rowPeak_colGN)
-  
-  rowPeak_colGN$peak_chr <- str_split(rowPeak_colGN$source,'-',simplify = T)[,1]
-  rowPeak_colGN$peak_start <- as.numeric(str_split(rowPeak_colGN$source,'-',simplify = T)[,2])
-  rowPeak_colGN$peak_end <- as.numeric(str_split(rowPeak_colGN$source,'-',simplify = T)[,3])
-  dim(rowPeak_colGN) ; head(rowPeak_colGN)
-  
-  ### Process gene_anno 
-  gene_anno$gene_start <- as.numeric(gene_anno$gene_start);gene_anno$gene_end <- as.numeric(gene_anno$gene_end)
-  gene_dupli <- unique(gene_anno$gene[duplicated(gene_anno$gene)]) ; length(gene_dupli)
-  dim(gene_anno);head(gene_anno)
-  gene_anno <- gene_anno[!gene_anno$gene %in% gene_dupli,]
-  dim(gene_anno);head(gene_anno);length(unique(gene_anno$gene))
-  table(gene_anno$gene_chr,useNA = "always")
-  
-  length(unique(rowPeak_colGN$target)) 
-  length(unique(gene_anno$gene))
-  length(intersect(rowPeak_colGN$target,gene_anno$gene)) 
-  intersect_gene <- length(intersect(unique(rowPeak_colGN$target),gene_anno$gene))
-  rowPeak_colGN_gene<- length(unique(rowPeak_colGN$target))
-  print(paste0("- annotated gene/total gene: ",intersect_gene,"/",rowPeak_colGN_gene))
-  if (rowPeak_colGN_gene>intersect_gene){
-    print(paste0("Genes not in Bed File: ",unique(rowPeak_colGN$target)[!unique(rowPeak_colGN$target) %in% gene_anno$gene]))
-  }
-  rowPeak_colGN <- merge(rowPeak_colGN,gene_anno,all.x=T,by.x="target",by.y="gene")
-  rowPeak_colGN$chr_info <- ifelse(rowPeak_colGN$peak_chr == rowPeak_colGN$gene_chr , "same", "diff")
-  dim(rowPeak_colGN) ; head(rowPeak_colGN)
-  table(rowPeak_colGN$chr_info,useNA = "always")
-  table(rowPeak_colGN$peak_chr,useNA = "always")
-  table(rowPeak_colGN$gene_chr,useNA = "always")
-  
-  ### Calculate Distance
-  calc_dist <- function(a1,a2,b1,b2){
-    if (a2 < b1) {
-      distance <- b1 - a2
-    } else if (b2 < a1) {
-      distance <- a1 - b2
+  network_path <- function(key, legacy_key, trimmed = FALSE) {
+    if (is.null(root)) stop("Supply Tenet_result_dir or all three network data frames.")
+    suffix <- if (trimmed) ".trimIndirect-0.01.sif" else ".sif"
+    if (!is.null(manifest)) {
+      required <- c("te_parquet", "sif_before_trim", "trimmed_sif")
+      if (!all(required %in% names(manifest))) stop("Invalid grn_network_outputs.tsv schema.")
+      hit <- which(basename(manifest$te_parquet) == paste0(key, ".parquet") &
+                   matches_threshold(manifest$sif_before_trim, paste0(key, "_fdr"), ".sif"))
+      if (length(hit) != 1L) stop("Expected one manifest entry for ", key, " at FDR ", alpha)
+      value <- manifest[[if (trimmed) "trimmed_sif" else "sif_before_trim"]][hit]
+      if (is.na(value) || !nzchar(value)) stop("Requested network was not generated: ", key, suffix)
+      path <- if (grepl("^/", value)) value else file.path(root, value)
     } else {
-      distance <- 0  
+      entries <- list.files(root, full.names = TRUE)
+      dirs <- entries[matches_threshold(entries, paste0("network_", key, "_fdr"), "") & dir.exists(entries)]
+      paths <- unlist(lapply(dirs, list.files, full.names = TRUE), use.names = FALSE)
+      found <- paths[matches_threshold(paths, paste0(key, "_fdr"), suffix)]
+      if (!length(found))
+        found <- entries[matches_threshold(entries, paste0("TE_result_matrix_", legacy_key, ".fdr"), suffix)]
+      if (length(found) != 1L)
+        stop("Expected one network file for ", key, " at FDR ", alpha, "; found ", length(found))
+      path <- found[1]
     }
-    return(distance)
+    if (!file.exists(path)) stop("Network file not found: ", path)
+    path
   }
-  rowPeak_colGN$distance <- apply(rowPeak_colGN,MARGIN=1,function(x) calc_dist(as.numeric(x["peak_start"]),as.numeric(x["peak_end"]),as.numeric(x["gene_start"]),as.numeric(x["gene_end"])))
-  head(rowPeak_colGN);dim(rowPeak_colGN)
-  rowPeak_colGN_dist_file <- paste0(Tenet_result_dir,"/TE_result_matrix_rowPeak_colGN.fdr0.01_AddDist.sif")
-  if (save == T){
-  write.table(rowPeak_colGN,rowPeak_colGN_dist_file,row.names = F,quote = F,col.names = T)
+  network <- function(value, key, legacy_key, cols, trimmed = FALSE) {
+    if (!is.data.frame(value)) {
+      path <- if (is.character(value) && length(value) == 1L && !is.na(value)) value else
+        network_path(key, legacy_key, trimmed)
+      if (!file.exists(path)) stop("Network file not found: ", path)
+      if (file.info(path)$size == 0) {
+        value <- data.frame(source = character(), score = numeric(), target = character())
+      } else {
+        value <- read.delim(path, header = FALSE, quote = "", comment.char = "",
+                            colClasses = "character", check.names = FALSE)
+      }
     }
-  cat('\n')
-  
-  # Trimming -------------------------------------------------------------
-  print(paste0("##### Trimming"))
-  if (class(gene_list)!="data.frame") {
-    gene_list <- read.delim(rowTF_colGN_file, header=FALSE);colnames(gene_list) <- c("TF","TF_GN_TE","gene")
+    if (all(c("Source", "TE", "Target") %in% names(value)))
+      value <- value[, c("Source", "TE", "Target"), drop = FALSE]
+    if (ncol(value) != 3L) stop("Network must have source, score, target columns: ", key)
+    names(value) <- cols
+    value[[1]] <- as.character(value[[1]]); value[[3]] <- as.character(value[[3]])
+    value[[2]] <- suppressWarnings(as.numeric(as.character(value[[2]])))
+    if (anyNA(value) || any(!nzchar(value[[1]])) || any(!nzchar(value[[3]])) ||
+        any(!is.finite(value[[2]]))) stop("Invalid network values: ", key)
+    value
   }
-  if(class(peak_list)!="data.frame"){
-    peak_list <- read.delim(rowTF_colPK_file, header=FALSE);colnames(peak_list) <- c("TF","TF_PK_TE","peak")
-  }
-  PK_gene_list <- read.table(rowPeak_colGN_dist_file,header = TRUE)
-  PK_gene_list=dplyr::rename(PK_gene_list,"PK_GN_TE"="score")
-  PK_gene_list=dplyr::rename(PK_gene_list,"peak"="source")
-  PK_gene_list=dplyr::rename(PK_gene_list,"gene"="target")
-  PK_gene_list$distance_category <- PK_gene_list$chr_info
-  PK_gene_list$distance_category <- ifelse(PK_gene_list$distance_category=="same",
-                                           ifelse(PK_gene_list$distance<=1000,"promoter",
-                                                  ifelse(PK_gene_list$distance<=1000000,"enhancer","same")),PK_gene_list$distance_category)
-  table(PK_gene_list$distance_category,useNA = "always")
-  
-  ## Step 1: PK -> GN
-  print(paste0("- distance: ",trim_distance))
-  if (trim_distance != 0){
-    PK_gene_list_enhan=subset(PK_gene_list,distance < trim_distance)
-  } else if (trim_distance == 0) {
-    PK_gene_list_enhan=PK_gene_list
-  }
-  dim(PK_gene_list_enhan) ;head(PK_gene_list_enhan,3)
-  
-  ## Step 2: TF -> PK
-  PK_gene_list_enhan_peak <- merge(PK_gene_list_enhan,peak_list,by="peak")
-  dim(PK_gene_list_enhan_peak) ; head(PK_gene_list_enhan_peak)
-  
-  ## Step 3: TF -> GN
-  trim_result <- merge(PK_gene_list_enhan_peak,gene_list,by=c("TF","gene"))
-  trim_result <- trim_result[,c("TF","gene","peak","TF_GN_TE","TF_PK_TE","PK_GN_TE","distance")]
-  dim(trim_result);head(trim_result)
-  length(paste0(trim_result$TF,"_",trim_result$gene,"_",trim_result$peak))
-  length(unique(paste0(trim_result$TF,"_",trim_result$gene,"_",trim_result$peak)))
-  print(paste("- trim_result's nrow: ",nrow(trim_result)))
-  
-  outdegree_trim_new <- as.data.frame(table(trim_result$TF)) ; outdegree_trim_new <- outdegree_trim_new[order(outdegree_trim_new$Freq,decreasing = T),] ; names(outdegree_trim_new) <- c("TF","outdegree")
-  outdegree_plot <- ggplot(head(outdegree_trim_new,20))+
-    geom_col(mapping=aes(x=reorder(TF,outdegree),y=outdegree))+
-    xlab("") + ylab("") +
-    theme_classic()+
-    ggtitle(paste0("Trimm Outdegree"))  +
-    theme(plot.title = element_text(hjust = 0.5,size=20),axis.text = element_text(face="bold"))+
-    coord_flip()
-  if (save == T){
-    trim_distance_temp <- convertNumberToUnit(trim_distance)
-    if (trim_indirect == T) {
-      result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance",trim_distance_temp,"_Indirect-0.01_TE_result_matrix.sif")
-    } else if (trim_indirect == F) {
-      result_name=paste0(Tenet_result_dir,"/trimmed_by_PeaksourceDistance",trim_distance_temp,"_TE_result_matrix.sif")
+  pkgn <- network(rowPeak_colGN, "TE_PK_GN", "rowPeak_colGN", c("peak", "PK_GN_TE", "gene"))
+  tfgn <- network(gene_list, "TE_TF_GN", "rowTF_colGN", c("TF", "TF_GN_TE", "gene"), trim_indirect)
+  tfpk <- network(peak_list, "TE_TF_PK", "rowTF_colPK", c("TF", "TF_PK_TE", "peak"))
+  if (is.character(gene_anno) && length(gene_anno) == 1L)
+    gene_anno <- read.table(gene_anno, header = TRUE, quote = "", comment.char = "",
+                            colClasses = "character", check.names = FALSE)
+  fields <- c("gene_chr", "gene_start", "gene_end", "gene")
+  if (!is.data.frame(gene_anno) || !all(fields %in% names(gene_anno)))
+    stop("gene_anno must contain gene_chr, gene_start, gene_end, gene.")
+  anno <- gene_anno[, fields, drop = FALSE]
+  anno$gene <- as.character(anno$gene); anno$gene_chr <- canonical(anno$gene_chr)
+  for (col in c("gene_start", "gene_end")) anno[[col]] <- suppressWarnings(as.numeric(as.character(anno[[col]])))
+  if (anyNA(anno) || any(!nzchar(anno$gene)) || any(!nzchar(anno$gene_chr)) ||
+      any(!is.finite(anno$gene_start)) || any(!is.finite(anno$gene_end)) ||
+      any(anno$gene_start < 0 | anno$gene_end <= anno$gene_start) ||
+      any(anno$gene_start != floor(anno$gene_start) | anno$gene_end != floor(anno$gene_end)))
+    stop("Invalid gene intervals; use 0-based, half-open coordinates.")
+  duplicates <- unique(anno$gene[duplicated(anno$gene)])
+  # Preserve the original R policy: exclude every row for duplicate gene names.
+  anno <- anno[!anno$gene %in% duplicates, , drop = FALSE]
+  peaks <- unique(c(pkgn$peak, tfpk$peak))
+  peak_info <- data.frame(peak = peaks, peak_chr = character(length(peaks)),
+                          peak_start = numeric(length(peaks)), peak_end = numeric(length(peaks)))
+  feature_path <- if (!is.null(root)) file.path(root, "feature_manifest.json") else ""
+  if (nzchar(feature_path) && file.exists(feature_path)) {
+    if (!requireNamespace("jsonlite", quietly = TRUE)) stop("Install jsonlite to read feature_manifest.json.")
+    features <- jsonlite::fromJSON(feature_path, simplifyVector = FALSE)$features
+    ids <- vapply(features, function(x) x$feature_id, character(1))
+    if (anyDuplicated(ids)) stop("Duplicate IDs in feature_manifest.json.")
+    positions <- match(peaks, ids)
+    if (anyNA(positions)) stop("Peak missing from feature_manifest.json.")
+    for (i in seq_along(peaks)) {
+      f <- features[[positions[i]]]
+      if (!identical(f$feature_type, "peak")) stop("Non-peak endpoint in peak network: ", peaks[i])
+      peak_info$peak_chr[i] <- f$contig; peak_info$peak_start[i] <- f$start; peak_info$peak_end[i] <- f$end
     }
-    write.table(trim_result,result_name,quote = F,row.names = F,col.names = T)
-    plot_name=gsub("_TE_result_matrix.sif",".pdf",basename(result_name))
-    plot_name=gsub("trimmed_by_","Outdegree_",plot_name)
-    pdf(paste0(Tenet_result_dir,"/",plot_name))
-    print(outdegree_plot)
-    dev.off()
+    rna_ids <- unique(c(pkgn$gene, tfgn$TF, tfgn$gene, tfpk$TF))
+    pos <- match(rna_ids, ids)
+    if (anyNA(pos) || any(vapply(features[pos], function(x) !identical(x$feature_type, "RNA"), logical(1))))
+      stop("Unknown or non-RNA endpoint in RNA network.")
+  } else {
+    parsed <- regmatches(peaks, regexec("^(.+)[:-]([0-9]+)-([0-9]+)$", peaks))
+    if (any(lengths(parsed) != 4L)) stop("Peak ID must be contig-start-end or contig:start-end.")
+    for (i in seq_along(peaks)) {
+      peak_info$peak_chr[i] <- parsed[[i]][2]
+      peak_info$peak_start[i] <- as.numeric(parsed[[i]][3]); peak_info$peak_end[i] <- as.numeric(parsed[[i]][4])
+    }
   }
-  cat('\n')
-  return(trim_result)
-  
+  peak_info$peak_chr <- canonical(peak_info$peak_chr)
+  if (anyNA(peak_info) || any(!nzchar(peak_info$peak_chr)) ||
+      any(!is.finite(peak_info$peak_start)) || any(!is.finite(peak_info$peak_end)) ||
+      any(peak_info$peak_start < 0 | peak_info$peak_start >= peak_info$peak_end) ||
+      any(peak_info$peak_start != floor(peak_info$peak_start) | peak_info$peak_end != floor(peak_info$peak_end)))
+    stop("Invalid peak coordinates.")
+  annotated <- merge(pkgn, peak_info, by = "peak", all.x = TRUE, sort = FALSE)
+  annotated <- merge(annotated, anno, by = "gene", all.x = TRUE, sort = FALSE)
+  annotated$status <- ifelse(annotated$gene %in% duplicates, "duplicate_gene",
+                            ifelse(is.na(annotated$gene_chr), "unmapped_gene",
+                                   ifelse(annotated$peak_chr != annotated$gene_chr, "different_contig", "same_contig")))
+  annotated$distance <- rep(NA_real_, nrow(annotated))
+  same <- annotated$status == "same_contig"
+  annotated$distance[same] <- pmax(annotated$gene_start[same] - annotated$peak_end[same],
+                                    annotated$peak_start[same] - annotated$gene_end[same], 0)
+  for (reason in c("duplicate_gene", "unmapped_gene", "different_contig")) {
+    n <- sum(annotated$status == reason)
+    if (n) warning(n, " peak-to-gene edges excluded: ", reason, call. = FALSE)
+  }
+  keep <- same & (trim_distance == 0 | (!is.na(annotated$distance) & annotated$distance < trim_distance))
+  annotated$status[same & !keep] <- "outside_distance"
+  trim_result <- merge(merge(annotated[keep, , drop = FALSE], tfpk, by = "peak"), tfgn, by = c("TF", "gene"))
+  trim_result <- trim_result[, c("TF", "gene", "peak", "TF_GN_TE", "TF_PK_TE", "PK_GN_TE", "distance"), drop = FALSE]
+  trim_result <- trim_result[order(trim_result$TF, trim_result$gene, trim_result$peak), , drop = FALSE]
+  rownames(trim_result) <- NULL
+  if (isTRUE(save)) {
+    if (is.null(root)) stop("Tenet_result_dir is required when save=TRUE.")
+    # Retain the original default result filename for downstream scripts.
+    stem <- paste0("trimmed_by_PeaksourceDistance", convertNumberToUnit(trim_distance),
+                   if (trim_indirect) "_Indirect-0.01" else "", if (fdr != 0.01) paste0("_fdr", alpha) else "")
+    write.table(trim_result, file.path(root, paste0(stem, "_TE_result_matrix.sif")),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+    write.table(annotated, file.path(root, paste0(stem, "_peak_gene_annotations.tsv")),
+                sep = "\t", quote = FALSE, row.names = FALSE)
+    degrees <- if (nrow(trim_result)) {
+      counts <- table(trim_result$TF)
+      data.frame(TF = names(counts), outdegree = as.integer(counts), stringsAsFactors = FALSE)
+    } else data.frame(TF = character(), outdegree = integer())
+    degrees <- head(degrees[order(-degrees$outdegree), , drop = FALSE], 20)
+    plot <- ggplot(degrees, aes(x = reorder(TF, outdegree), y = outdegree)) +
+      geom_col() + coord_flip() + theme_classic() + labs(x = NULL, y = "Triplet count")
+    ggsave(file.path(root, paste0(sub("^trimmed_by_", "Outdegree_", stem), ".pdf")),
+           plot = plot, width = 7, height = 5)
+  }
+  attr(trim_result, "peak_gene_annotations") <- annotated
+  trim_result
 }
 
 

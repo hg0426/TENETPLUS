@@ -28,6 +28,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 import re
 
+from code.feature_utils import load_peak_names
 from code.path_utils import coerce_input_path, locate_file, resolve_output
 
 
@@ -112,7 +113,7 @@ def _load_gene_names_map() -> Dict[str, int]:
     mapping: Dict[str, int] = {}
     with gene_file.open(encoding="utf-8") as handle:
         for idx, line in enumerate(handle, start=1):
-            mapping[line.strip()] = idx
+            mapping[line.rstrip('\r\n')] = idx
     return mapping
 
 
@@ -121,7 +122,7 @@ def _load_gene_names_list() -> List[str]:
     if not gene_file.exists():
         raise FileNotFoundError("gene_names file not found; required for split LocalTE export.")
     with gene_file.open(encoding="utf-8") as handle:
-        return [line.strip() for line in handle]
+        return [line.rstrip('\r\n') for line in handle]
 
 
 def _coerce_index(value, mapping: Optional[Dict[str, int]]) -> int:
@@ -129,15 +130,12 @@ def _coerce_index(value, mapping: Optional[Dict[str, int]]) -> int:
         return int(value)
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    string = str(value).strip()
-    try:
-        return int(string)
-    except ValueError:
-        if mapping is None:
-            raise
-        if string not in mapping:
-            raise ValueError(f"Gene/peak name '{string}' not found in gene_names mapping.")
-        return mapping[string]
+    string = str(value)
+    if mapping is None:
+        raise ValueError('String endpoints require a feature-name mapping')
+    if string not in mapping:
+        raise ValueError(f"Feature name {string!r} is absent from gene_names; numeric indices require integer Parquet columns")
+    return mapping[string]
 
 
 def _read_selector(path: Path) -> pd.DataFrame:
@@ -145,9 +143,9 @@ def _read_selector(path: Path) -> pd.DataFrame:
     if suffix == ".parquet":
         return pd.read_parquet(path, columns=["Source", "Target"])
     if suffix in {".csv"}:
-        return pd.read_csv(path, usecols=["Source", "Target"])
+        return pd.read_csv(path, usecols=["Source", "Target"], dtype=str, keep_default_na=False)
     if suffix in {".tsv", ".txt"}:
-        return pd.read_csv(path, sep="\t", usecols=["Source", "Target"])
+        return pd.read_csv(path, sep="\t", usecols=["Source", "Target"], dtype=str, keep_default_na=False)
     raise ValueError(f"Unsupported selector format for {path}; expected parquet/csv/tsv.")
 
 
@@ -166,9 +164,9 @@ def _read_unique_source_indices(path: Path, mapping: Dict[str, int]) -> set[int]
             if con is not None:
                 con.close()
     elif suffix == ".csv":
-        values = pd.read_csv(path, usecols=["Source"])["Source"].drop_duplicates().tolist()
+        values = pd.read_csv(path, usecols=["Source"], dtype=str, keep_default_na=False)["Source"].drop_duplicates().tolist()
     elif suffix in {".tsv", ".txt"}:
-        values = pd.read_csv(path, sep="\t", usecols=["Source"])["Source"].drop_duplicates().tolist()
+        values = pd.read_csv(path, sep="\t", usecols=["Source"], dtype=str, keep_default_na=False)["Source"].drop_duplicates().tolist()
     else:
         raise ValueError(f"Unsupported selector format for {path}; expected parquet/csv/tsv.")
     return {_coerce_index(v, mapping) for v in values}
@@ -247,6 +245,10 @@ def init_chunk_buffers() -> Dict[int, Dict[str, List]]:
     )
 
 
+def _is_on(value: str | None) -> bool:
+    return str(value or "").strip().lower() in ("on", "1", "true", "yes")
+
+
 def flush_chunk(chunk_idx: int, buffer: Dict[str, List], writers: Dict[int, pq.ParquetWriter], out_dir: Path, chunk_size: int, value_type: pa.DataType, compression: str = "snappy", zstd_level: int | None = None, use_dictionary: bool = True) -> None:
     if not buffer["sources"]:
         return
@@ -262,8 +264,13 @@ def flush_chunk(chunk_idx: int, buffer: Dict[str, List], writers: Dict[int, pq.P
         np_dtype = np.float16 if pa.types.is_float16(value_type) else np.float32
         flat = np.empty(0, dtype=np_dtype)
     values_array = pa.array(flat, type=value_type)
-    offsets_array = pa.array(offsets, type=pa.int32())
-    list_array = pa.ListArray.from_arrays(offsets_array, values_array)
+    use_fixed_values = _is_on(os.getenv("LOCAL_TE_FIXED_SIZE_VALUES", "off"))
+    segment_sizes = [int(arr.size) for arr in buffer["values_arrays"]]
+    if use_fixed_values and segment_sizes and len(set(segment_sizes)) == 1:
+        list_array = pa.FixedSizeListArray.from_arrays(values_array, int(segment_sizes[0]))
+    else:
+        offsets_array = pa.array(offsets, type=pa.int32())
+        list_array = pa.ListArray.from_arrays(offsets_array, values_array)
 
     table = pa.table(
         {
@@ -981,9 +988,10 @@ def _export_known_splits_single_pass(args, input_specs: Sequence[Tuple[Path, Lis
         raise FileNotFoundError(f"Input parquet not found: {input_path}")
     names = _load_gene_names_list()
     name_to_idx = {name: idx for idx, name in enumerate(names, start=1)}
+    peak_names = load_peak_names(names, locate_file("TE_peak_list.txt"))
     is_peak = np.zeros(len(names) + 1, dtype=bool)
     for idx, name in enumerate(names, start=1):
-        is_peak[idx] = str(name).startswith("chr")
+        is_peak[idx] = name in peak_names
 
     base_output = Path(args.output_dir)
     base_output.mkdir(parents=True, exist_ok=True)

@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # Monitor memory usage of a target PID and all descendants
-# Samples exactly every 1s (aligned to a fixed schedule) and logs with consistent formatting.
+# Samples on a one-second schedule. The legacy GB label contains GiB values.
 
 TARGET_PID=$1
 STAGE_FILE=${2:-}
-GPU_TOGGLE_RAW=${3:-}
 OUTPUT_FILE="${MEMORY_MONITOR_OUTPUT:-}"
 if [ -z "$OUTPUT_FILE" ]; then
     if [ -n "$STAGE_FILE" ]; then
@@ -65,8 +64,8 @@ collect_pgid_pids() {
 }
 
 # Measure total CPU (system RAM) usage
-# mode rss (default): fast, sums RSS via one or few ps calls
-# mode pss: accurate shared-accounting via smaps_rollup/smaps (heavier)
+# mode rss: fast, sums RSS via one or few ps calls
+# mode pss (default): accurate shared-accounting via smaps_rollup/smaps (heavier)
 measure_cpu_memory_usage_kb() {
     local pids=("$@")
     local mode="${MEMORY_MONITOR_MODE:-pss}"
@@ -116,78 +115,9 @@ measure_cpu_memory_usage_kb() {
     echo "$total_kb"
 }
 
-# Resolve GPU toggle once for reuse
-GPU_TOGGLE_RESOLVED=${GPU_TOGGLE_RAW}
-if [ -z "$GPU_TOGGLE_RESOLVED" ]; then
-    GPU_TOGGLE_RESOLVED="${MEMORY_MONITOR_GPU:-off}"
-fi
-GPU_TOGGLE_RESOLVED=$(echo "$GPU_TOGGLE_RESOLVED" | tr '[:upper:]' '[:lower:]')
-GPU_ENABLED=1
-if [ "$GPU_TOGGLE_RESOLVED" = "off" ] || [ "$GPU_TOGGLE_RESOLVED" = "0" ] || [ "$GPU_TOGGLE_RESOLVED" = "no" ]; then
-    GPU_ENABLED=0
-fi
-
-# Measure total GPU memory usage (MiB) for the given PIDs using procfs if available, else fall back to nvidia-smi
-measure_gpu_memory_usage_mib() {
-    local pids=("$@")
-    local total_mib=0
-    # Check toggle: skip work entirely if disabled
-    if [ $GPU_ENABLED -eq 0 ]; then
-        echo 0
-        return
-    fi
-
-    # Try fast procfs path first
-    local have_proc=0
-    for f in /proc/driver/nvidia/gpus/*/processes; do
-        [ -r "$f" ] || continue
-        have_proc=1
-        # Sum MiB for our PIDs found in this file
-        local add
-        add=$(awk -v PIDS="$(printf '%s ' "${pids[@]}")" '
-            BEGIN {
-                split(PIDS, arr)
-                for (i in arr) if (arr[i] != "") want[arr[i]] = 1
-                pid = ""; used = 0; sum = 0
-            }
-            /Process ID:/ { pid=$3 }
-            /Used GPU Memory:/ {
-                # Handle formats like: "Used GPU Memory: 123 MiB" or "Memory: 123 MiB"
-                for (i=1; i<=NF; i++) if ($i ~ /^[0-9]+$/) { used=$i; break }
-                unit=$(NF)
-                mib = (unit ~ /GiB/) ? used*1024 : (unit ~ /KiB/) ? used/1024 : used
-                if (pid in want) sum += mib
-                pid = ""; used = 0
-            }
-            END { print sum+0 }
-        ' "$f")
-        total_mib=$(( total_mib + ${add:-0} ))
-    done
-
-    if [ $have_proc -eq 0 ]; then
-        if command -v nvidia-smi >/dev/null 2>&1; then
-            local gpu_mem_info pid gpu_mem
-            gpu_mem_info=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null || true)
-            if [ -n "$gpu_mem_info" ]; then
-                for pid in "${pids[@]}"; do
-                    gpu_mem=$(awk -F',' -v pid="$pid" '$1 == pid {sum+=$2} END {print sum+0}' <<<"$gpu_mem_info")
-                    total_mib=$(( total_mib + gpu_mem ))
-                done
-            fi
-        fi
-    fi
-
-    echo "$total_mib"
-}
-
 # Convert kB -> GiB with 6 decimals
 kb_to_gib() {
     awk -v kb="$1" 'BEGIN { printf "%.6f", kb/1048576 }'
-}
-
-# Convert MiB -> GiB with 6 decimals
-mib_to_gib() {
-    awk -v mib="$1" 'BEGIN { printf "%.6f", mib/1024 }'
 }
 
 # Align sampling to a fixed 1s schedule
@@ -250,16 +180,7 @@ while true; do
     mapfile -t all_pids < <(exclude_self "${all_pids[@]}")
 
     total_cpu_kb=$(measure_cpu_memory_usage_kb "${all_pids[@]}")
-    if [ $GPU_ENABLED -eq 1 ]; then
-        total_gpu_mib=$(measure_gpu_memory_usage_mib "${all_pids[@]}")
-    else
-        total_gpu_mib=0
-    fi
-
     cpu_gib=$(kb_to_gib "$total_cpu_kb")
-    if [ $GPU_ENABLED -eq 1 ]; then
-        gpu_gib=$(mib_to_gib "$total_gpu_mib")
-    fi
 
     # Read current stage label (optional)
     stage_label=""
@@ -272,18 +193,10 @@ while true; do
     tick_sec=$(( tick_ns / 1000000000 ))
     tick_nano=$(( tick_ns % 1000000000 ))
     ts_date=$(date -d "@${tick_sec}" '+%Y-%m-%d %H:%M:%S')
-    if [ $GPU_ENABLED -eq 1 ]; then
-        if [ -n "$stage_label" ]; then
-            printf "%s.%09d %s GB %s GB STAGE:%s\n" "$ts_date" "$tick_nano" "$cpu_gib" "$gpu_gib" "$stage_label" >> "$OUTPUT_FILE"
-        else
-            printf "%s.%09d %s GB %s GB\n" "$ts_date" "$tick_nano" "$cpu_gib" "$gpu_gib" >> "$OUTPUT_FILE"
-        fi
+    if [ -n "$stage_label" ]; then
+        printf "%s.%09d %s GB STAGE:%s\n" "$ts_date" "$tick_nano" "$cpu_gib" "$stage_label" >> "$OUTPUT_FILE"
     else
-        if [ -n "$stage_label" ]; then
-            printf "%s.%09d %s GB STAGE:%s\n" "$ts_date" "$tick_nano" "$cpu_gib" "$stage_label" >> "$OUTPUT_FILE"
-        else
-            printf "%s.%09d %s GB\n" "$ts_date" "$tick_nano" "$cpu_gib" >> "$OUTPUT_FILE"
-        fi
+        printf "%s.%09d %s GB\n" "$ts_date" "$tick_nano" "$cpu_gib" >> "$OUTPUT_FILE"
     fi
 
     # Schedule next tick (exact 1s cadence)

@@ -1,5 +1,7 @@
 #runTE_for_py_python_batch.py
 import os
+from code.feature_utils import load_peak_names
+import sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")  # avoid oversubscription with multiprocessing
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -10,7 +12,11 @@ import argparse
 import numpy as np
 import multiprocessing
 import time
+import json
+import math
+import shutil
 from collections import OrderedDict
+from pathlib import Path
 from scipy import sparse
 from scipy.stats import norm
 from tqdm import tqdm
@@ -23,6 +29,7 @@ from .Calc_TE_python import (
     compute_te_for_sources_with_context,
     _chebyshev_adjacency_packed,
 )
+from .path_utils import locate_file
 import datetime
 import logging
 import duckdb
@@ -32,12 +39,60 @@ try:
 except ImportError:  # pragma: no cover
     pa = None
     pq = None
+try:
+    from .localte_chunk_export import (
+        _append_localte_to_state,
+        _decode_local_te,
+        _finalize_export_state,
+        _new_export_state,
+        _route_known_split_indices,
+    )
+except Exception:  # pragma: no cover - direct LocalTE export is optional
+    _append_localte_to_state = None
+    _decode_local_te = None
+    _finalize_export_state = None
+    _new_export_state = None
+    _route_known_split_indices = None
+try:
+    from .localte_video_pack import (
+        append_localte_to_video_state,
+        finalize_video_export_state,
+        new_video_export_state,
+        warmup_video_factorized_encoder,
+    )
+except Exception:  # pragma: no cover - video LocalTE export is optional
+    append_localte_to_video_state = None
+    finalize_video_export_state = None
+    new_video_export_state = None
+    warmup_video_factorized_encoder = None
 
 # Toggle storing per-timepoint local TE
 STORE_LOCAL_TE = False
 LOCAL_TE_DTYPE = np.float16
 LOCAL_TE_DTYPE_STR = 'float16'
 LOCAL_TE_CODEC = os.getenv('TE_LOCALTE_CODEC', 'zlib').lower()
+LOCAL_TE_DIRECT_CHUNKS = os.getenv("LOCAL_TE_DIRECT_CHUNKS", "off").lower()
+LOCAL_TE_DIRECT_WORKERS = os.getenv("LOCAL_TE_DIRECT_WORKERS", "on").lower()
+LOCAL_TE_DIRECT_SCORE_PARTS = os.getenv("LOCAL_TE_DIRECT_SCORE_PARTS", "off").lower()
+LOCAL_TE_VIDEO_TILES = os.getenv("LOCAL_TE_VIDEO_TILES", "off").lower()
+LOCAL_TE_VIDEO_EDGE_FORMAT = os.getenv("LOCAL_TE_VIDEO_EDGE_FORMAT", "binary").lower()
+LOCAL_TE_VIDEO_CODEC = os.getenv("LOCAL_TE_VIDEO_CODEC", "zstd").lower()
+LOCAL_TE_VIDEO_FACTORIZE = os.getenv("LOCAL_TE_VIDEO_FACTORIZE", "off").lower()
+LOCAL_TE_VIRTUAL = os.getenv("LOCAL_TE_VIRTUAL", "off").lower()
+LOCAL_TE_VIRTUAL_OUTPUT_DIR = os.getenv("LOCAL_TE_VIRTUAL_OUTPUT_DIR", "local_te_virtual_array")
+LOCAL_TE_VIRTUAL_VALUE_DTYPE = os.getenv("LOCAL_TE_VIRTUAL_VALUE_DTYPE", "float32").lower()
+LOCAL_TE_VIRTUAL_COMPRESSION = os.getenv("LOCAL_TE_VIRTUAL_COMPRESSION", "zstd").lower()
+LOCAL_TE_VIRTUAL_BUFFER_EDGES = int(os.getenv("LOCAL_TE_VIRTUAL_BUFFER_EDGES", "5000"))
+LOCAL_TE_VIRTUAL_CODE_INDEX = os.getenv("LOCAL_TE_VIRTUAL_CODE_INDEX", "off").lower()
+LOCAL_TE_VIRTUAL_STATE_CODE_BITS = os.getenv("LOCAL_TE_VIRTUAL_STATE_CODE_BITS", "32").strip().lower()
+LOCAL_TE_CODE_INDEX_OUTPUT_DIR = os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", "local_te_code_index")
+LOCAL_TE_CODE_INDEX_COMPRESSION = os.getenv("LOCAL_TE_CODE_INDEX_COMPRESSION", "zstd").lower()
+LOCAL_TE_CODE_INDEX_BATCH_FEATURES = int(os.getenv("LOCAL_TE_CODE_INDEX_BATCH_FEATURES", "512"))
+LOCAL_TE_RECIPE_DIR = os.getenv("LOCAL_TE_RECIPE_DIR", "local_te_recipe")
+try:
+    LOCAL_TE_VIDEO_LEVEL = int(os.getenv("LOCAL_TE_VIDEO_LEVEL", "1"))
+except Exception:
+    LOCAL_TE_VIDEO_LEVEL = 1
 DENSE_THRESHOLD = int(os.getenv("TE_DENSE_THRESHOLD", "250"))
 KERNEL_BACKEND = os.getenv("TE_KERNEL_BACKEND", "auto").lower()
 KERNEL_DENSE_MAX_OBS = int(os.getenv("TE_KERNEL_DENSE_MAX_OBS", "4096"))
@@ -145,6 +200,7 @@ GENE_NAMES = None
 
 # Optional global timepoint subsampling indices (applied to all series)
 TIME_SUBSAMPLE_INDICES = None
+VIRTUAL_LOCAL_TE_MARKER = "__VIRTUAL_LOCALTE__"
 
 
 def _human_int(value) -> str:
@@ -513,8 +569,8 @@ def _kernel_source_pack_memmap_enabled(total_obs: int, n_sources: int) -> bool:
         return False
     if requested in ("on", "1", "true", "yes"):
         return True
-    # Auto is aimed at the CD4-like regime where rebuilding T x T source masks
-    # dominates both wall time and worker-local memory.
+    # Auto is aimed at large source-heavy runs where rebuilding T x T source
+    # masks dominates both wall time and worker-local memory.
     return int(total_obs) >= 1500 and int(n_sources) >= 256
 
 
@@ -1117,8 +1173,151 @@ def _grouped_state_te_local_from_coded(
         local_by_unique,
         code_space,
     )
-    te = float(np.sum(local_values64) / source_codes.size)
+    # Match the scalar grouped-state reduction before storing local values.
+    te = float(np.sum(local_by_unique[valid] * w[valid]) / source_codes.size)
     return te, local_values64.astype(np.float32, copy=False)
+
+
+def _virtual_localte_value_type(dtype: str):
+    dtype = str(dtype or "float32").lower()
+    if dtype in ("float16", "fp16", "half"):
+        return pa.float16(), np.float16, "float16"
+    return pa.float32(), np.float32, "float32"
+
+
+def _virtual_state_code_type():
+    bits = str(os.getenv("LOCAL_TE_VIRTUAL_STATE_CODE_BITS", LOCAL_TE_VIRTUAL_STATE_CODE_BITS)).strip().lower()
+    if bits in ("32", "int32", "i32"):
+        return pa.int32(), np.int32, "int32"
+    return pa.int64(), np.int64, "int64"
+
+
+def _virtual_localte_schema(value_type) -> pa.Schema:
+    code_type, _code_np_dtype, _code_dtype_str = _virtual_state_code_type()
+    return pa.schema(
+        [
+            ("Source", pa.int64()),
+            ("Target", pa.int64()),
+            ("TE", pa.float64()),
+            ("NTargetStates", pa.int32()),
+            ("NObs", pa.int32()),
+            ("NLocalStates", pa.int32()),
+            ("StateCodes", pa.list_(code_type)),
+            ("LocalValues", pa.list_(value_type)),
+        ]
+    )
+
+
+def _grouped_state_te_virtual_from_coded(
+    source_values: np.ndarray,
+    source_codes: np.ndarray,
+    target_codes: np.ndarray,
+    target_past_values: np.ndarray,
+    target_next_values: np.ndarray,
+    target_factor_context=None,
+    max_unique: int = 0,
+    value_dtype=np.float32,
+) -> tuple[float, int, int, np.ndarray, np.ndarray] | None:
+    """Exact TE plus compact LocalTE state table for virtual LocalTE storage."""
+    n_obs = int(source_codes.size)
+    if source_values.size == 0:
+        return 0.0, 0, n_obs, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=value_dtype)
+    n_target_states = int(target_past_values.size)
+    if n_target_states <= 0:
+        return 0.0, n_target_states, n_obs, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=value_dtype)
+    n_source_states = int(source_values.size)
+    code_space = n_source_states * n_target_states
+    combined_codes = np.asarray(source_codes, dtype=np.int64) * n_target_states + np.asarray(
+        target_codes,
+        dtype=np.int64,
+    )
+    use_bincount = str(KERNEL_GROUPED_STATE_BINCOUNT).lower() not in ("off", "0", "false", "no")
+    if use_bincount and int(KERNEL_GROUPED_STATE_BINCOUNT_MAX) > 0:
+        use_bincount = code_space <= int(KERNEL_GROUPED_STATE_BINCOUNT_MAX)
+    if use_bincount:
+        counts = np.bincount(combined_codes, minlength=code_space)
+        combined_unique = np.flatnonzero(counts)
+        weights = counts[combined_unique]
+    else:
+        combined_unique, weights = np.unique(combined_codes, return_counts=True)
+    if combined_unique.size == 0:
+        return 0.0, n_target_states, n_obs, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=value_dtype)
+    if int(max_unique) > 0 and combined_unique.size > int(max_unique):
+        return None
+
+    src_code = combined_unique // n_target_states
+    tgt_code = combined_unique - (src_code * n_target_states)
+    w = weights.astype(np.int64, copy=False)
+
+    if target_factor_context is not None:
+        requested = str(KERNEL_GROUPED_STATE_FACTORIZED).lower()
+        if (
+            requested in ("off", "0", "false", "no")
+            or (requested in ("auto", "") and int(source_codes.size) < int(KERNEL_GROUPED_STATE_FACTORIZED_MIN_OBS))
+            or (int(KERNEL_GROUPED_STATE_FACTORIZED_MAX) > 0 and code_space > int(KERNEL_GROUPED_STATE_FACTORIZED_MAX))
+        ):
+            target_factor_context = None
+
+    if target_factor_context is not None:
+        W = np.zeros(code_space, dtype=np.int64)
+        W[combined_unique] = w
+        W = W.reshape(n_source_states, n_target_states)
+        target_past_left = target_factor_context[0]
+        target_past_right = target_factor_context[1]
+        count_past_by_target = target_factor_context[3]
+        count_next_past_by_target = target_factor_context[4]
+        use_source_prefix = str(KERNEL_GROUPED_STATE_SOURCE_PREFIX).lower() not in ("off", "0", "false", "no")
+        if use_source_prefix:
+            source_weighted = _source_interval_weighted_counts(source_values, W)
+        else:
+            source_ok = (np.abs(source_values[:, None] - source_values[None, :]) <= 1.0).astype(
+                np.int64,
+                copy=False,
+            )
+            source_weighted = source_ok @ W
+        count_past_source_matrix = _target_past_interval_weighted_counts(
+            target_past_left,
+            target_past_right,
+            source_weighted,
+        )
+        count_next_past_source_matrix = _target_past_next_interval_weighted_counts(
+            target_factor_context,
+            source_weighted,
+        )
+        count_past_source = count_past_source_matrix[src_code, tgt_code]
+        count_next_past_source = count_next_past_source_matrix[src_code, tgt_code]
+        count_past = count_past_by_target[tgt_code]
+        count_next_past = count_next_past_by_target[tgt_code]
+    else:
+        us = source_values[src_code]
+        up = target_past_values[tgt_code]
+        uy = target_next_values[tgt_code]
+        past_ok = np.abs(up[:, None] - up[None, :]) <= 1.0
+        next_ok = np.abs(uy[:, None] - uy[None, :]) <= 1.0
+        source_ok = np.abs(us[:, None] - us[None, :]) <= 1.0
+        count_past = past_ok @ w
+        past_next_ok = past_ok & next_ok
+        count_next_past = past_next_ok @ w
+        count_past_source = (past_ok & source_ok) @ w
+        count_next_past_source = (past_next_ok & source_ok) @ w
+
+    local_by_unique = np.zeros(combined_unique.size, dtype=np.float64)
+    valid = (count_past_source > 0) & (count_past > 0) & (count_next_past > 0)
+    if np.any(valid):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            numerator = count_next_past_source[valid] / count_past_source[valid]
+            denominator = count_next_past[valid] / count_past[valid]
+            log_terms = np.log(numerator / denominator)
+            log_terms = np.where(np.isfinite(log_terms), log_terms, 0.0)
+        local_by_unique[valid] = log_terms / np.log(2.0)
+    te = float(np.sum(local_by_unique[valid] * w[valid]) / n_obs)
+    return (
+        te,
+        n_target_states,
+        n_obs,
+        np.asarray(combined_unique, dtype=np.int64),
+        np.asarray(local_by_unique, dtype=value_dtype),
+    )
 
 
 def _grouped_state_te_from_factorized(
@@ -1428,6 +1627,28 @@ def _grouped_state_te_from_sparse_coded(
     return float(np.sum((log_terms / np.log(2.0)) * w[valid]) / int(n_obs))
 
 
+_PREFIX_DATA = None
+
+class _PrefixColumns:
+    """Preserve integer IDs and float64 scores without per-pair Python objects."""
+    def __init__(self, sources, target, scores):
+        self.sources = np.asarray(sources, dtype=np.int64)
+        self.target = int(target)
+        self.scores = scores
+
+    def __len__(self):
+        return len(self.sources)
+
+def _process_prefix_target(args):
+    from .exact_prefix import prepare_target, score_target
+    target_idx, source_indices, history_length, kernel_width = args
+    packed, values, codes = _PREFIX_DATA
+    target, context = prepare_target(_get_series(int(target_idx)), sys.modules[__name__])
+    source_indices_array = np.asarray(source_indices, dtype=np.int64) - 1
+    scores, _ = score_target(source_indices_array, packed, target, context, values, codes,
+                             sys.modules[__name__])
+    return _PrefixColumns(source_indices, target_idx, scores)
+
 def _process_grouped_state_target(args):
     target_idx, source_indices, historyLength, kernel_width = args
     try:
@@ -1454,8 +1675,10 @@ def _process_grouped_state_target(args):
         rows = []
         fallback_ctx = None
         max_unique = int(KERNEL_GROUPED_STATE_MAX_UNIQUE)
+        virtual_localte = _is_on(LOCAL_TE_VIRTUAL)
+        virtual_np_dtype = _virtual_localte_value_type(LOCAL_TE_VIRTUAL_VALUE_DTYPE)[1] if virtual_localte else None
         use_coded = str(KERNEL_GROUPED_STATE_CODED).lower() not in ("off", "0", "false", "no")
-        if STORE_LOCAL_TE:
+        if STORE_LOCAL_TE or virtual_localte:
             use_coded = True
         if use_coded:
             target_codes, target_past_values, target_next_values, target_counts = _target_grouped_state_codes(
@@ -1479,6 +1702,7 @@ def _process_grouped_state_target(args):
             use_sparse_source = (
                 str(KERNEL_GROUPED_STATE_SPARSE).lower() not in ("off", "0", "false", "no")
                 and not STORE_LOCAL_TE
+                and not virtual_localte
             )
         for source_idx in source_indices:
             if use_coded:
@@ -1521,11 +1745,46 @@ def _process_grouped_state_target(args):
                                 local_dtype,
                                 local_codec,
                             ))
+                        elif virtual_localte:
+                            rows.append((
+                                int(source_idx),
+                                int(target_idx),
+                                0.0,
+                                VIRTUAL_LOCAL_TE_MARKER,
+                                0,
+                                int(scaled_past.shape[0]),
+                                np.zeros(0, dtype=np.int64),
+                                np.zeros(0, dtype=virtual_np_dtype),
+                            ))
                         else:
                             rows.append((int(source_idx), int(target_idx), 0.0))
                         continue
                     te = None
-                    if STORE_LOCAL_TE:
+                    if virtual_localte:
+                        virtual_result = _grouped_state_te_virtual_from_coded(
+                            source_values,
+                            source_codes,
+                            target_codes,
+                            target_past_values,
+                            target_next_values,
+                            target_factor_context=target_factor_context,
+                            max_unique=max_unique,
+                            value_dtype=virtual_np_dtype,
+                        )
+                        if virtual_result is not None:
+                            te, n_target_states, n_obs, state_codes, local_values = virtual_result
+                            rows.append((
+                                int(source_idx),
+                                int(target_idx),
+                                te,
+                                VIRTUAL_LOCAL_TE_MARKER,
+                                int(n_target_states),
+                                int(n_obs),
+                                state_codes,
+                                local_values,
+                            ))
+                            continue
+                    elif STORE_LOCAL_TE:
                         local_result = _grouped_state_te_local_from_coded(
                             source_values,
                             source_codes,
@@ -1583,6 +1842,17 @@ def _process_grouped_state_target(args):
                             local_dtype,
                             local_codec,
                         ))
+                    elif virtual_localte:
+                        rows.append((
+                            int(source_idx),
+                            int(target_idx),
+                            0.0,
+                            VIRTUAL_LOCAL_TE_MARKER,
+                            0,
+                            int(scaled_past.shape[0]),
+                            np.zeros(0, dtype=np.int64),
+                            np.zeros(0, dtype=virtual_np_dtype),
+                        ))
                     else:
                         rows.append((int(source_idx), int(target_idx), 0.0))
                     continue
@@ -1602,7 +1872,30 @@ def _process_grouped_state_target(args):
                     )
                 scaled_source = _get_scaled_source_kernel(int(source_idx), int(historyLength), float(kernel_width))
                 source_series = _maybe_subsample(_get_series(int(source_idx)))
-                if STORE_LOCAL_TE:
+                if virtual_localte:
+                    te_vals, local_vals = compute_te_for_sources_with_context(
+                        fallback_ctx,
+                        [source_series],
+                        reuse_dest_neighbors=False,
+                        dense_threshold=DENSE_THRESHOLD,
+                        return_local=True,
+                        scaled_sources=[scaled_source],
+                        source_ok_packed=[None],
+                        packed_vector_block=1,
+                    )
+                    dense_values = np.asarray(local_vals[0], dtype=virtual_np_dtype)
+                    rows.append((
+                        int(source_idx),
+                        int(target_idx),
+                        float(te_vals[0]),
+                        VIRTUAL_LOCAL_TE_MARKER,
+                        -1,
+                        int(dense_values.size),
+                        np.zeros(0, dtype=np.int64),
+                        dense_values,
+                    ))
+                    continue
+                elif STORE_LOCAL_TE:
                     te_vals, local_vals = compute_te_for_sources_with_context(
                         fallback_ctx,
                         [source_series],
@@ -1658,6 +1951,20 @@ def _process_grouped_state_target(args):
                         int(target_idx),
                         0.0,
                         *_encode_local_te(np.zeros(0, dtype=np.float32)),
+                    )
+                    for s in source_indices
+                ]
+            if _is_on(LOCAL_TE_VIRTUAL):
+                return [
+                    (
+                        int(s),
+                        int(target_idx),
+                        0.0,
+                        VIRTUAL_LOCAL_TE_MARKER,
+                        0,
+                        0,
+                        np.zeros(0, dtype=np.int64),
+                        np.zeros(0, dtype=_virtual_localte_value_type(LOCAL_TE_VIRTUAL_VALUE_DTYPE)[1]),
                     )
                     for s in source_indices
                 ]
@@ -1978,7 +2285,7 @@ def ensure_gene_names(path='gene_names'):
         return GENE_NAMES
     try:
         with open(path, 'r') as fh:
-            GENE_NAMES = [line.strip() for line in fh if line.strip()]
+            GENE_NAMES = [line.rstrip('\r\n') for line in fh]
         if GENE_NAMES:
             logging.info(f"Loaded {len(GENE_NAMES)} gene names from {path}.")
         else:
@@ -2004,6 +2311,1078 @@ def gene_name_from_index(idx):
         return names[int(idx) - 1]
     except (IndexError, ValueError, TypeError):
         return str(int(idx)) if idx is not None else None
+
+
+def _is_on(value) -> bool:
+    return str(value).strip().lower() in ("on", "1", "true", "yes", "y")
+
+
+def _direct_localte_keys(pair_mode: str, split_type: str) -> list[str]:
+    """Return LocalTE split outputs that match Matrix_generate outputs."""
+    pair_mode = str(pair_mode or "default").strip().lower()
+    split_type = str(split_type or "1").strip()
+    if pair_mode in ("gene_only", "all_gene"):
+        return ["TE_GN_GN"]
+    if pair_mode in ("all_feature", "all", "full", "gene_peak"):
+        return ["TE_all_features"]
+    if split_type == "1":
+        return ["TE_TF_GN", "TE_TF_PK", "TE_PK_GN"]
+    if split_type == "2":
+        return ["TE_TF_GN"]
+    if split_type == "3":
+        return ["TE_TF_PK"]
+    if split_type == "4":
+        return ["TE_TF_GN", "TE_TF_PK"]
+    if split_type == "5":
+        return ["TE_PK_GN"]
+    if split_type == "6":
+        return ["TE_PK_PK"]
+    return ["TE_TF_GN"]
+
+
+def _read_name_set(path) -> set[str]:
+    try:
+        resolved = locate_file(str(path))
+    except Exception:
+        resolved = path
+    try:
+        with open(resolved, "r", encoding="utf-8") as handle:
+            return {line.strip() for line in handle if line.strip()}
+    except Exception:
+        return set()
+
+
+def _new_virtual_localte_state(out_dir: Path, value_type, compression: str, buffer_edges: int, value_dtype: str) -> dict:
+    part_dir = Path(out_dir)
+    part_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "part_dir": part_dir,
+        "rows": [],
+        "part_idx": 0,
+        "edges": 0,
+        "states": 0,
+        "value_type": value_type,
+        "compression": None if str(compression).lower() == "none" else str(compression),
+        "buffer_edges": max(1, int(buffer_edges)),
+        "value_dtype": str(value_dtype),
+    }
+
+
+def _write_virtual_localte_part(state: dict) -> None:
+    rows = state.get("rows") or []
+    if not rows:
+        return
+    value_type = state["value_type"]
+    table = pa.table(
+        {
+            "Source": pa.array([r["Source"] for r in rows], type=pa.int64()),
+            "Target": pa.array([r["Target"] for r in rows], type=pa.int64()),
+            "TE": pa.array([r["TE"] for r in rows], type=pa.float64()),
+            "NTargetStates": pa.array([r["NTargetStates"] for r in rows], type=pa.int32()),
+            "NObs": pa.array([r["NObs"] for r in rows], type=pa.int32()),
+            "NLocalStates": pa.array([r["NLocalStates"] for r in rows], type=pa.int32()),
+            "StateCodes": pa.array([r["StateCodes"] for r in rows], type=pa.list_(pa.int64())),
+            "LocalValues": pa.array([r["LocalValues"] for r in rows], type=pa.list_(value_type)),
+        },
+        schema=_virtual_localte_schema(value_type),
+    )
+    part_path = Path(state["part_dir"]) / f"part_{int(state['part_idx']):06d}.parquet"
+    pq.write_table(table, part_path, compression=state["compression"])
+    state["part_idx"] = int(state["part_idx"]) + 1
+    state["rows"] = []
+
+
+def _append_virtual_localte_row(
+    state: dict,
+    source: int,
+    target: int,
+    score: float,
+    n_target_states: int,
+    n_obs: int,
+    state_codes,
+    local_values,
+) -> None:
+    _code_type, code_np_dtype, _code_dtype_str = _virtual_state_code_type()
+    if code_np_dtype is np.int32 and np.asarray(state_codes).size:
+        max_code = int(np.max(state_codes))
+        min_code = int(np.min(state_codes))
+        if min_code < np.iinfo(np.int32).min or max_code > np.iinfo(np.int32).max:
+            raise OverflowError(
+                "StateCodes exceed int32 range; rerun with LOCAL_TE_VIRTUAL_STATE_CODE_BITS=64."
+            )
+    state_codes = np.asarray(state_codes, dtype=code_np_dtype)
+    local_values = np.asarray(local_values)
+    state["rows"].append(
+        {
+            "Source": int(source),
+            "Target": int(target),
+            "TE": float(score),
+            "NTargetStates": int(n_target_states),
+            "NObs": int(n_obs),
+            "NLocalStates": int(local_values.size if int(n_target_states) < 0 else state_codes.size),
+            "StateCodes": state_codes,
+            "LocalValues": local_values,
+        }
+    )
+    state["edges"] = int(state.get("edges", 0)) + 1
+    state["states"] = int(state.get("states", 0)) + int(local_values.size if int(n_target_states) < 0 else state_codes.size)
+    if len(state["rows"]) >= int(state["buffer_edges"]):
+        _write_virtual_localte_part(state)
+
+
+def _finalize_virtual_localte_state(state: dict) -> dict:
+    _write_virtual_localte_part(state)
+    return {
+        "edges": int(state.get("edges", 0)),
+        "states": int(state.get("states", 0)),
+        "parts": int(state.get("part_idx", 0)),
+    }
+
+
+def _virtual_code_index_enabled() -> bool:
+    return _is_on(LOCAL_TE_VIRTUAL) and _is_on(os.getenv("LOCAL_TE_VIRTUAL_CODE_INDEX", LOCAL_TE_VIRTUAL_CODE_INDEX))
+
+
+def _virtual_code_index_feature_sets(pair_mode: str, list_pairs, pair_index_info) -> tuple[np.ndarray, np.ndarray]:
+    if pair_mode == "default" and list_pairs is not None and len(list_pairs) > 0:
+        arr = np.asarray(list_pairs, dtype=np.int64)
+        return np.unique(arr[:, 0]), np.unique(arr[:, 1])
+    if pair_index_info is not None and "indices" in pair_index_info:
+        indices = np.asarray(pair_index_info["indices"], dtype=np.int64)
+        indices = np.unique(indices)
+        return indices, indices
+    return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+
+
+def _target_codes_for_code_index(target_idx: int, history_length: int, kernel_width: float) -> tuple[np.ndarray, int, int]:
+    dest = _maybe_subsample(_get_series(int(target_idx)))
+    if dest.size <= int(history_length):
+        return np.zeros(0, dtype=np.int32), 0, 0
+    dest_past = dest[:-1].astype(np.float64, copy=False)
+    dest_next = dest[1:].astype(np.float64, copy=False)
+    epsilon = 1e-9
+    kw_past = float(kernel_width) * (np.std(dest_past, ddof=1) + epsilon)
+    kw_next = float(kernel_width) * (np.std(dest_next, ddof=1) + epsilon)
+    scaled_past = np.divide(dest_past, kw_past, out=np.zeros_like(dest_past), where=(kw_past != 0))
+    scaled_next = np.divide(dest_next, kw_next, out=np.zeros_like(dest_next), where=(kw_next != 0))
+    target_codes, target_past_values, _target_next_values, _target_counts = _target_grouped_state_codes(
+        scaled_past,
+        scaled_next,
+    )
+    return (
+        np.asarray(target_codes, dtype=np.int32),
+        int(target_past_values.size),
+        int(target_codes.size),
+    )
+
+
+def _write_code_index_rows(path: Path, rows: list[dict], schema: pa.Schema, compression: str, writer) -> object:
+    if not rows:
+        return writer
+    names = set(schema.names)
+    payload = {
+        "Feature": pa.array([r["Feature"] for r in rows], type=pa.int64()),
+        "NObs": pa.array([r["NObs"] for r in rows], type=pa.int32()),
+    }
+    if "NSourceStates" in names:
+        payload["NSourceStates"] = pa.array([r["NSourceStates"] for r in rows], type=pa.int32())
+        payload["SourceCodes"] = pa.array([r["SourceCodes"] for r in rows], type=pa.list_(pa.int32()))
+    else:
+        payload["NTargetStates"] = pa.array([r["NTargetStates"] for r in rows], type=pa.int32())
+        payload["TargetCodes"] = pa.array([r["TargetCodes"] for r in rows], type=pa.list_(pa.int32()))
+    table = pa.table(payload, schema=schema)
+    if writer is None:
+        writer = pq.ParquetWriter(
+            path,
+            schema,
+            compression=None if str(compression).lower() == "none" else str(compression),
+        )
+    writer.write_table(table)
+    rows.clear()
+    return writer
+
+
+def _write_virtual_code_index(
+    source_indices,
+    target_indices,
+    history_length: int,
+    kernel_width: float = 0.5,
+    output_dir: str | None = None,
+) -> dict | None:
+    """Write reusable source/target code sequences for virtual LocalTE export.
+
+    The virtual LocalTE table stores edge-specific state values.  Exporting full
+    timepoint arrays also needs source and target code sequences; storing them
+    once per feature avoids recomputing the same sequences for every edge.
+    """
+    if not _virtual_code_index_enabled():
+        return None
+    if pa is None or pq is None:
+        logging.warning("Virtual LocalTE code index skipped because pyarrow is unavailable.")
+        return None
+
+    sources = np.asarray(source_indices, dtype=np.int64)
+    targets = np.asarray(target_indices, dtype=np.int64)
+    sources = np.unique(sources[sources > 0])
+    targets = np.unique(targets[targets > 0])
+    if sources.size == 0 and targets.size == 0:
+        return None
+
+    out_dir = Path(output_dir or os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR))
+    compression = os.getenv("LOCAL_TE_CODE_INDEX_COMPRESSION", LOCAL_TE_CODE_INDEX_COMPRESSION).strip().lower()
+    batch_features = max(1, int(os.getenv("LOCAL_TE_CODE_INDEX_BATCH_FEATURES", str(LOCAL_TE_CODE_INDEX_BATCH_FEATURES))))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in ("source_codes.parquet", "target_codes.parquet", "metadata.json"):
+        try:
+            (out_dir / stale).unlink()
+        except FileNotFoundError:
+            pass
+
+    source_schema = pa.schema(
+        [
+            ("Feature", pa.int64()),
+            ("NObs", pa.int32()),
+            ("NSourceStates", pa.int32()),
+            ("SourceCodes", pa.list_(pa.int32())),
+        ]
+    )
+    target_schema = pa.schema(
+        [
+            ("Feature", pa.int64()),
+            ("NObs", pa.int32()),
+            ("NTargetStates", pa.int32()),
+            ("TargetCodes", pa.list_(pa.int32())),
+        ]
+    )
+    start = time.time()
+    print(
+        f"[LocalTE] Building virtual code index: sources={_human_int(sources.size)}, "
+        f"targets={_human_int(targets.size)}, out={out_dir}"
+    )
+
+    source_writer = None
+    source_rows: list[dict] = []
+    try:
+        for feature in sources:
+            source_values, source_codes = _get_grouped_source_codes_kernel(
+                int(feature),
+                int(history_length),
+                float(kernel_width),
+            )
+            source_rows.append(
+                {
+                    "Feature": int(feature),
+                    "NObs": int(np.asarray(source_codes).size),
+                    "NSourceStates": int(np.asarray(source_values).size),
+                    "SourceCodes": np.asarray(source_codes, dtype=np.int32),
+                }
+            )
+            if len(source_rows) >= batch_features:
+                source_writer = _write_code_index_rows(
+                    out_dir / "source_codes.parquet",
+                    source_rows,
+                    source_schema,
+                    compression,
+                    source_writer,
+                )
+        source_writer = _write_code_index_rows(
+            out_dir / "source_codes.parquet",
+            source_rows,
+            source_schema,
+            compression,
+            source_writer,
+        )
+    finally:
+        if source_writer is not None:
+            source_writer.close()
+
+    target_writer = None
+    target_rows: list[dict] = []
+    try:
+        for feature in targets:
+            target_codes, n_target_states, n_obs = _target_codes_for_code_index(
+                int(feature),
+                int(history_length),
+                float(kernel_width),
+            )
+            target_rows.append(
+                {
+                    "Feature": int(feature),
+                    "NObs": int(n_obs),
+                    "NTargetStates": int(n_target_states),
+                    "TargetCodes": np.asarray(target_codes, dtype=np.int32),
+                }
+            )
+            if len(target_rows) >= batch_features:
+                target_writer = _write_code_index_rows(
+                    out_dir / "target_codes.parquet",
+                    target_rows,
+                    target_schema,
+                    compression,
+                    target_writer,
+                )
+        target_writer = _write_code_index_rows(
+            out_dir / "target_codes.parquet",
+            target_rows,
+            target_schema,
+            compression,
+            target_writer,
+        )
+    finally:
+        if target_writer is not None:
+            target_writer.close()
+
+    elapsed = time.time() - start
+    payload = {
+        "format": "tenet_localte_code_index_v1",
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "history_length": int(history_length),
+        "kernel_width": float(kernel_width),
+        "sources": int(sources.size),
+        "targets": int(targets.size),
+        "compression": str(compression),
+        "batch_features": int(batch_features),
+        "elapsed_seconds": float(elapsed),
+    }
+    (out_dir / "metadata.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"[LocalTE] Code index ready in {elapsed:.2f} seconds: {out_dir}")
+    return payload
+
+
+def _build_direct_localte_exporter(args, pair_mode: str, total_pairs: int):
+    """Prepare state for direct LocalTE time-chunk writing."""
+    if _is_on(LOCAL_TE_VIRTUAL):
+        if getattr(args, "permute", False):
+            return None
+        if pa is None or pq is None:
+            logging.warning("Virtual LocalTE disabled because pyarrow is unavailable.")
+            return None
+        out_root = os.getenv("LOCAL_TE_VIRTUAL_OUTPUT_DIR", LOCAL_TE_VIRTUAL_OUTPUT_DIR)
+        value_type, value_np_dtype, value_dtype_str = _virtual_localte_value_type(
+            os.getenv("LOCAL_TE_VIRTUAL_VALUE_DTYPE", LOCAL_TE_VIRTUAL_VALUE_DTYPE)
+        )
+        buffer_edges = max(1, int(os.getenv("LOCAL_TE_VIRTUAL_BUFFER_EDGES", str(LOCAL_TE_VIRTUAL_BUFFER_EDGES))))
+        compression = os.getenv("LOCAL_TE_VIRTUAL_COMPRESSION", LOCAL_TE_VIRTUAL_COMPRESSION).strip().lower()
+        out_path = Path(out_root)
+        if (out_path / "parts").exists():
+            shutil.rmtree(out_path / "parts")
+        for stale in ("metadata.json", "direct_virtual_localte_done.json"):
+            try:
+                (out_path / stale).unlink()
+            except FileNotFoundError:
+                pass
+        out_path.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[LocalTE] Virtual exact array: out={out_root}, dtype={value_dtype_str}, "
+            f"buffer_edges={buffer_edges}, compression={compression}"
+        )
+        return {
+            "virtual_array": True,
+            "out_root": out_root,
+            "keys": ["ALL"],
+            "specs": [("ALL", out_root)],
+            "states": [],
+            "value_type": value_type,
+            "value_np_dtype": value_np_dtype,
+            "value_dtype": value_dtype_str,
+            "compression": compression,
+            "buffer_edges": buffer_edges,
+            "routed_counts": [0],
+            "total_pairs": int(total_pairs),
+            "args": args,
+        }
+    if not STORE_LOCAL_TE:
+        return None
+    if not _is_on(LOCAL_TE_DIRECT_CHUNKS):
+        return None
+    if getattr(args, "permute", False):
+        return None
+    if not _is_on(os.getenv("LOCAL_TE_SPLIT_EXPORT", "on")):
+        return None
+    use_video_tiles = _is_on(LOCAL_TE_VIDEO_TILES)
+    if any(
+        helper is None
+        for helper in (
+            _append_localte_to_state,
+            _decode_local_te,
+            _finalize_export_state,
+            _new_export_state,
+            _route_known_split_indices,
+        )
+    ):
+        logging.warning("Direct LocalTE chunks disabled because chunk-export helpers are unavailable.")
+        return None
+    if use_video_tiles and any(
+        helper is None
+        for helper in (
+            append_localte_to_video_state,
+            finalize_video_export_state,
+            new_video_export_state,
+            warmup_video_factorized_encoder,
+        )
+    ):
+        logging.warning("Direct LocalTE video tiles disabled because video helpers are unavailable.")
+        return None
+    if pa is None or pq is None:
+        logging.warning("Direct LocalTE chunks disabled because pyarrow is unavailable.")
+        return None
+
+    names = ensure_gene_names()
+    if not names:
+        logging.warning("Direct LocalTE chunks disabled because gene_names is unavailable.")
+        return None
+
+    split_type = str(getattr(args, "split_type", "1") or "1")
+    species = str(getattr(args, "species", "") or "").strip()
+    keys = _direct_localte_keys(pair_mode, split_type)
+    if not keys:
+        return None
+
+    name_to_idx = {name: idx for idx, name in enumerate(names, start=1)}
+    is_peak = np.zeros(len(names) + 1, dtype=bool)
+    peak_names = load_peak_names(names, locate_file("TE_peak_list.txt"))
+    for idx, name in enumerate(names, start=1):
+        if name in peak_names:
+            is_peak[idx] = True
+
+    tf_sources: set[int] = set()
+    if any(key.startswith("TE_TF_") for key in keys):
+        from code.species_support import load_tf_names
+        tf_names = set(load_tf_names(species))
+        tf_sources = {name_to_idx[name] for name in tf_names if name in name_to_idx}
+        if not tf_sources:
+            logging.warning("Direct LocalTE chunks disabled because TF source list is empty.")
+            return None
+
+    if use_video_tiles:
+        out_root = os.getenv("LOCAL_TE_VIDEO_OUTPUT_DIR", "local_te_video_tiles")
+    else:
+        out_root = os.getenv("LOCAL_TE_SPLIT_OUTPUT_DIR", "local_te_split_chunks")
+    chunk_size = max(1, int(os.getenv("LOCAL_TE_CHUNK_SIZE", "300")))
+    direct_buffer_default = os.getenv("LOCAL_TE_DIRECT_BUFFER_EDGES", "").strip()
+    if not direct_buffer_default or direct_buffer_default.lower() == "auto":
+        direct_buffer_default = (
+            "5000"
+            if use_video_tiles and _is_on(LOCAL_TE_DIRECT_WORKERS)
+            else ("500" if _is_on(LOCAL_TE_DIRECT_WORKERS) else os.getenv("LOCAL_TE_BUFFER_EDGES", "10000"))
+        )
+    buffer_edges = max(1, int(direct_buffer_default))
+    values_dtype_str = os.getenv("LOCAL_TE_VALUES_DTYPE", "float16").strip().lower()
+    if values_dtype_str not in ("float16", "float32"):
+        values_dtype_str = "float16"
+    values_dtype = np.float16 if values_dtype_str == "float16" else np.float32
+    value_type = pa.float16() if values_dtype is np.float16 else pa.float32()
+    compression = os.getenv("LOCAL_TE_CHUNK_COMPRESSION", "snappy").strip().lower()
+    if compression == "none":
+        compression = None
+    zstd_level_env = os.getenv("LOCAL_TE_ZSTD_LEVEL", "")
+    try:
+        zstd_level = int(zstd_level_env) if zstd_level_env else None
+    except Exception:
+        zstd_level = None
+    use_dictionary = not _is_on(os.getenv("LOCAL_TE_NO_DICTIONARY", "off"))
+    disable_chunk_scores = _is_on(os.getenv("LOCAL_TE_DISABLE_CHUNK_SCORES", "off"))
+
+    export_args = argparse.Namespace(
+        disable_scores=disable_chunk_scores,
+        compression=compression or "none",
+        zstd_level=zstd_level,
+        no_dictionary=(not use_dictionary),
+        buffer_edges=buffer_edges,
+        values_dtype=values_dtype_str,
+        use_threads=os.getenv("LOCAL_TE_USE_THREADS", "on"),
+    )
+    states = []
+    specs = []
+    for key in keys:
+        out_dir = os.path.join(out_root, key)
+        if use_video_tiles:
+            states.append(
+                new_video_export_state(
+                    Path(out_dir),
+                    chunk_size,
+                    LOCAL_TE_VIDEO_LEVEL,
+                    values_dtype_str,
+                    LOCAL_TE_VIDEO_EDGE_FORMAT,
+                    LOCAL_TE_VIDEO_CODEC,
+                    _is_on(LOCAL_TE_VIDEO_FACTORIZE),
+                )
+            )
+        else:
+            states.append(_new_export_state(Path(out_dir)))
+        specs.append((key, out_dir))
+
+    scores_schema = pa.schema(
+        [
+            ("Source", pa.int32()),
+            ("Target", pa.int32()),
+            ("TE", pa.float32()),
+            ("LocalTE_total_len", pa.int32()),
+        ]
+    )
+    Path(out_root).mkdir(parents=True, exist_ok=True)
+    if use_video_tiles and _is_on(LOCAL_TE_VIDEO_FACTORIZE):
+        warmup_video_factorized_encoder(chunk_size)
+    if use_video_tiles:
+        print(
+            f"[LocalTE] Direct video-tile streaming: {len(keys)} outputs -> {out_root} "
+            f"(chunk={chunk_size}, dtype={values_dtype_str}, buffer_edges={buffer_edges}, "
+            f"codec={LOCAL_TE_VIDEO_CODEC}-{LOCAL_TE_VIDEO_LEVEL}, edges={LOCAL_TE_VIDEO_EDGE_FORMAT}, "
+            f"factorize={LOCAL_TE_VIDEO_FACTORIZE})"
+        )
+    else:
+        print(
+            f"[LocalTE] Direct chunk streaming: {len(keys)} outputs -> {out_root} "
+            f"(chunk={chunk_size}, dtype={values_dtype_str}, buffer_edges={buffer_edges})"
+        )
+    logging.info(
+        "Direct LocalTE %s enabled: keys=%s, total_pairs=%d, out=%s.",
+        "video tiles" if use_video_tiles else "chunks",
+        ",".join(keys),
+        int(total_pairs),
+        out_root,
+    )
+    return {
+        "out_root": out_root,
+        "keys": keys,
+        "specs": specs,
+        "states": states,
+        "is_peak": is_peak,
+        "tf_sources": tf_sources,
+        "chunk_size": chunk_size,
+        "buffer_edges": buffer_edges,
+        "values_dtype": values_dtype,
+        "value_type": value_type,
+        "compression": compression or "none",
+        "zstd_level": zstd_level,
+        "use_dictionary": use_dictionary,
+        "video_tiles": use_video_tiles,
+        "video_level": int(LOCAL_TE_VIDEO_LEVEL),
+        "video_edge_format": str(LOCAL_TE_VIDEO_EDGE_FORMAT),
+        "video_codec": str(LOCAL_TE_VIDEO_CODEC),
+        "video_factorize": bool(_is_on(LOCAL_TE_VIDEO_FACTORIZE)),
+        "scores_schema": scores_schema,
+        "args": export_args,
+        "routed_counts": [0 for _ in keys],
+    }
+
+
+def _direct_localte_append_rows(exporter: dict | None, rows) -> list[tuple[int, int, float]]:
+    """Route LocalTE payloads to direct chunk writers and return score-only rows."""
+    if exporter is None:
+        return rows
+    score_rows = []
+    keys = exporter["keys"]
+    for row in rows:
+        if exporter.get("virtual_array") and len(row) >= 8 and row[3] == VIRTUAL_LOCAL_TE_MARKER:
+            src_i = int(row[0])
+            tgt_i = int(row[1])
+            score = float(row[2])
+            score_rows.append((src_i, tgt_i, score))
+            _append_virtual_localte_row(
+                exporter["states"][0],
+                src_i,
+                tgt_i,
+                score,
+                int(row[4]),
+                int(row[5]),
+                row[6],
+                row[7],
+            )
+            exporter["routed_counts"][0] += 1
+            continue
+        if len(row) < 7:
+            score_rows.append((int(row[0]), int(row[1]), float(row[2])))
+            continue
+        src_i = int(row[0])
+        tgt_i = int(row[1])
+        score = float(row[2])
+        score_rows.append((src_i, tgt_i, score))
+        blob, length, dtype_str, codec = row[3], row[4], row[5], row[6]
+        if blob is None or length is None or int(length) == 0:
+            continue
+        out_indices = _route_known_split_indices(
+            src_i,
+            tgt_i,
+            exporter["is_peak"],
+            exporter["tf_sources"],
+            keys,
+        )
+        if not out_indices:
+            continue
+        values = _decode_local_te(blob, dtype_str, int(length), codec)
+        if values.size == 0:
+            continue
+        if values.dtype != exporter["values_dtype"]:
+            values = values.astype(exporter["values_dtype"], copy=False)
+        for out_idx in out_indices:
+            exporter["routed_counts"][out_idx] += 1
+            if exporter.get("video_tiles"):
+                append_localte_to_video_state(
+                    exporter["states"][out_idx],
+                    src_i,
+                    tgt_i,
+                    score,
+                    values,
+                    int(length),
+                    exporter["chunk_size"],
+                    exporter["buffer_edges"],
+                )
+            else:
+                _append_localte_to_state(
+                    exporter["states"][out_idx],
+                    src_i,
+                    tgt_i,
+                    score,
+                    values,
+                    int(length),
+                    exporter["chunk_size"],
+                    exporter["buffer_edges"],
+                    exporter["value_type"],
+                    exporter["compression"],
+                    exporter["zstd_level"],
+                    exporter["use_dictionary"],
+                    bool(exporter["args"].disable_scores),
+                    exporter["scores_schema"],
+                )
+    return score_rows
+
+
+def _direct_localte_finalize(exporter: dict | None) -> None:
+    if exporter is None:
+        return
+    if exporter.get("virtual_array"):
+        summaries = [_finalize_virtual_localte_state(state) for state in exporter["states"]]
+        total_edges = sum(int(s["edges"]) for s in summaries)
+        total_states = sum(int(s["states"]) for s in summaries)
+        out_root = Path(exporter["out_root"])
+        payload = {
+            "format": "tenet_localte_virtual_array_v1",
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "recipe": os.path.abspath(os.path.join(os.getenv("LOCAL_TE_RECIPE_DIR", LOCAL_TE_RECIPE_DIR), "recipe.json")),
+            "edges": os.path.abspath("TE_result_all.parquet"),
+            "matrix_parquet": os.path.abspath("cell_gene_trsps.parquet"),
+            "gene_names": os.path.abspath("gene_names"),
+            "time_index_map": os.path.abspath("time_index_map.parquet") if os.path.exists("time_index_map.parquet") else None,
+            "all_pairs": os.path.abspath(getattr(exporter.get("args"), "input_file", "all_pairs.csv")),
+            "history_length": int(getattr(exporter.get("args"), "history_length", 1)),
+            "kernel_width": 0.5,
+            "code_index": os.path.abspath(os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR))
+            if os.path.exists(os.path.join(os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR), "metadata.json"))
+            else None,
+            "parts_dir": "parts",
+            "edges_stored": int(total_edges),
+            "state_values_stored": int(total_states),
+            "mean_states_per_edge": float(total_states / total_edges) if total_edges else 0.0,
+            "value_dtype": str(exporter["value_dtype"]),
+            "compression": str(exporter["compression"]),
+            "buffer_edges": int(exporter["buffer_edges"]),
+            "worker_results": summaries,
+            "note": "Virtual LocalTE written during kernel TE. Dense fallback edges use NTargetStates=-1.",
+        }
+        (out_root / "metadata.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        (out_root / "direct_virtual_localte_done.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(
+            f"[LocalTE] Virtual array completed: {total_edges:,} edges, "
+            f"{total_states:,} stored values -> {out_root}"
+        )
+        return
+    for state in exporter["states"]:
+        if exporter.get("video_tiles"):
+            finalize_video_export_state(state)
+        else:
+            _finalize_export_state(
+                state,
+                exporter["args"],
+                exporter["chunk_size"],
+                exporter["value_type"],
+            )
+    marker = Path(exporter["out_root"]) / "direct_localte_done.json"
+    payload = {
+        "mode": "direct_video_tile_stream" if exporter.get("video_tiles") else "direct_chunk_stream",
+        "format": "localte_video_tiles_v1" if exporter.get("video_tiles") else "localte_chunk_parquet_v1",
+        "keys": exporter["keys"],
+        "outputs": [
+            {"key": key, "out_dir": out_dir, "edges": int(count)}
+            for (key, out_dir), count in zip(exporter["specs"], exporter["routed_counts"])
+        ],
+        "chunk_size": int(exporter["chunk_size"]),
+        "values_dtype": str(exporter["args"].values_dtype),
+        "compression": str(exporter.get("video_codec", "zstd")) if exporter.get("video_tiles") else str(exporter["compression"]),
+        "video_tiles": bool(exporter.get("video_tiles")),
+        "video_level": int(exporter.get("video_level", 0)),
+        "video_edge_format": str(exporter.get("video_edge_format", "")),
+        "video_codec": str(exporter.get("video_codec", "")),
+        "video_factorize": bool(exporter.get("video_factorize", False)),
+        "chunk_scores": False if exporter.get("video_tiles") else (not bool(exporter["args"].disable_scores)),
+    }
+    marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    for item in payload["outputs"]:
+        print(f"[LocalTE] Direct {item['key']}: {item['edges']:,} edges -> {item['out_dir']}")
+    label = "video-tile" if exporter.get("video_tiles") else "chunk"
+    print(f"[LocalTE] Direct {label} streaming completed: {marker}")
+
+
+def _direct_localte_make_worker_exporter(exporter: dict, worker_id: int) -> dict:
+    """Create per-worker LocalTE chunk states under parts_wXX directories."""
+    worker = dict(exporter)
+    worker_specs = []
+    worker_states = []
+    for key, out_dir in exporter["specs"]:
+        if exporter.get("virtual_array"):
+            part_dir = Path(out_dir) / "parts" / f"worker_{int(worker_id):03d}"
+            worker_specs.append((key, str(part_dir)))
+            worker_states.append(
+                _new_virtual_localte_state(
+                    part_dir,
+                    exporter["value_type"],
+                    exporter["compression"],
+                    exporter["buffer_edges"],
+                    exporter["value_dtype"],
+                )
+            )
+            continue
+        part_dir = Path(out_dir) / f"parts_w{int(worker_id):02d}"
+        worker_specs.append((key, str(part_dir)))
+        if exporter.get("video_tiles"):
+            worker_states.append(
+                new_video_export_state(
+                    part_dir,
+                    exporter["chunk_size"],
+                    exporter.get("video_level", 1),
+                    str(exporter["args"].values_dtype),
+                    str(exporter.get("video_edge_format", "binary")),
+                    str(exporter.get("video_codec", "zstd")),
+                    bool(exporter.get("video_factorize", False)),
+                )
+            )
+        else:
+            worker_states.append(_new_export_state(part_dir))
+    worker["specs"] = worker_specs
+    worker["states"] = worker_states
+    worker["routed_counts"] = [0 for _ in exporter["keys"]]
+    return worker
+
+
+def _direct_localte_finalize_worker(exporter: dict | None) -> list[int]:
+    """Finalize one worker's chunk writers and return routed counts."""
+    if exporter is None:
+        return []
+    for state in exporter["states"]:
+        if exporter.get("virtual_array"):
+            _finalize_virtual_localte_state(state)
+            continue
+        if exporter.get("video_tiles"):
+            finalize_video_export_state(state)
+        else:
+            _finalize_export_state(
+                state,
+                exporter["args"],
+                exporter["chunk_size"],
+                exporter["value_type"],
+            )
+    return [int(x) for x in exporter.get("routed_counts", [])]
+
+
+def _direct_localte_write_marker_from_worker_counts(exporter: dict | None, worker_counts: list[list[int]]) -> None:
+    """Write the direct LocalTE completion marker for worker-owned part outputs."""
+    if exporter is None:
+        return
+    totals = [0 for _ in exporter["keys"]]
+    for counts in worker_counts:
+        for i, value in enumerate(counts):
+            if i < len(totals):
+                totals[i] += int(value)
+    marker = Path(exporter["out_root"]) / "direct_localte_done.json"
+    if exporter.get("virtual_array"):
+        out_root = Path(exporter["out_root"])
+        parts = sorted((out_root / "parts").rglob("part_*.parquet"))
+        total_states = 0
+        for part in parts:
+            try:
+                table = pq.read_table(str(part), columns=["NLocalStates"])
+                total_states += int(table.column("NLocalStates").combine_chunks().to_numpy().sum())
+            except Exception:
+                pass
+        total_edges = int(totals[0]) if totals else 0
+        payload = {
+            "format": "tenet_localte_virtual_array_v1",
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "recipe": os.path.abspath(os.path.join(os.getenv("LOCAL_TE_RECIPE_DIR", LOCAL_TE_RECIPE_DIR), "recipe.json")),
+            "edges": os.path.abspath("TE_result_all.parquet"),
+            "matrix_parquet": os.path.abspath("cell_gene_trsps.parquet"),
+            "gene_names": os.path.abspath("gene_names"),
+            "time_index_map": os.path.abspath("time_index_map.parquet") if os.path.exists("time_index_map.parquet") else None,
+            "all_pairs": os.path.abspath(getattr(exporter.get("args"), "input_file", "all_pairs.csv")),
+            "history_length": int(getattr(exporter.get("args"), "history_length", 1)),
+            "kernel_width": 0.5,
+            "code_index": os.path.abspath(os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR))
+            if os.path.exists(os.path.join(os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR), "metadata.json"))
+            else None,
+            "parts_dir": "parts",
+            "edges_stored": total_edges,
+            "state_values_stored": int(total_states),
+            "mean_states_per_edge": float(total_states / total_edges) if total_edges else 0.0,
+            "value_dtype": str(exporter["value_dtype"]),
+            "compression": str(exporter["compression"]),
+            "buffer_edges": int(exporter["buffer_edges"]),
+            "workers": len(worker_counts),
+            "worker_counts": worker_counts,
+            "note": "Virtual LocalTE written during kernel TE. Dense fallback edges use NTargetStates=-1.",
+        }
+        (out_root / "metadata.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        (out_root / "direct_virtual_localte_done.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(
+            f"[LocalTE] Virtual array completed: {total_edges:,} edges, "
+            f"{int(total_states):,} stored values -> {out_root}"
+        )
+        return
+    payload = {
+        "mode": (
+            "direct_video_tile_stream_worker_parts"
+            if exporter.get("video_tiles")
+            else "direct_chunk_stream_worker_parts"
+        ),
+        "format": "localte_video_tiles_v1" if exporter.get("video_tiles") else "localte_chunk_parquet_v1",
+        "keys": exporter["keys"],
+        "outputs": [
+            {"key": key, "out_dir": out_dir, "edges": int(count)}
+            for (key, out_dir), count in zip(exporter["specs"], totals)
+        ],
+        "chunk_size": int(exporter["chunk_size"]),
+        "values_dtype": str(exporter["args"].values_dtype),
+        "compression": str(exporter.get("video_codec", "zstd")) if exporter.get("video_tiles") else str(exporter["compression"]),
+        "video_tiles": bool(exporter.get("video_tiles")),
+        "video_level": int(exporter.get("video_level", 0)),
+        "video_edge_format": str(exporter.get("video_edge_format", "")),
+        "video_codec": str(exporter.get("video_codec", "")),
+        "video_factorize": bool(exporter.get("video_factorize", False)),
+        "merge_parts": False,
+        "chunk_scores": False if exporter.get("video_tiles") else (not bool(exporter["args"].disable_scores)),
+    }
+    marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    for item in payload["outputs"]:
+        print(f"[LocalTE] Direct {item['key']}: {item['edges']:,} edges -> {item['out_dir']}")
+    label = "video-tile" if exporter.get("video_tiles") else "chunk"
+    print(f"[LocalTE] Direct worker {label} streaming completed: {marker}")
+
+
+def _direct_localte_worker_loop(
+    worker_id: int,
+    task_queue,
+    result_queue,
+    exporter: dict,
+    score_parts_dir: str | None = None,
+    score_buffer_rows: int = 5000,
+) -> None:
+    """Compute grouped-state target tasks and write LocalTE chunks inside one worker."""
+    worker_exporter = _direct_localte_make_worker_exporter(exporter, worker_id)
+    score_writer_state = {"writer": None, "rows": 0}
+    score_buffer = []
+    score_columns = ["Source", "Target", "TE"]
+    score_output = None
+    if score_parts_dir:
+        score_output = str(Path(score_parts_dir) / f"part_w{int(worker_id):02d}.parquet")
+
+    def flush_scores():
+        nonlocal score_buffer
+        if not score_output or not score_buffer:
+            return
+        _append_grouped_rows_to_parquet_writer(
+            score_buffer,
+            score_columns,
+            score_writer_state,
+            score_output,
+        )
+        score_buffer = []
+
+    try:
+        while True:
+            task = task_queue.get()
+            if task is None:
+                break
+            target_rows = _process_grouped_state_target(task)
+            score_rows = _direct_localte_append_rows(worker_exporter, target_rows)
+            if score_output:
+                score_buffer.extend(score_rows)
+                if len(score_buffer) >= max(1, int(score_buffer_rows)):
+                    flush_scores()
+                result_queue.put(("progress", int(len(score_rows))))
+            else:
+                result_queue.put(("rows", int(len(score_rows)), score_rows))
+    except BaseException as exc:
+        result_queue.put(("error", int(worker_id), repr(exc)))
+    finally:
+        try:
+            flush_scores()
+        except BaseException as exc:
+            result_queue.put(("error", int(worker_id), f"score finalize failed: {exc!r}"))
+        finally:
+            if score_writer_state.get("writer") is not None:
+                score_writer_state["writer"].close()
+                score_writer_state["writer"] = None
+        try:
+            counts = _direct_localte_finalize_worker(worker_exporter)
+        except BaseException as exc:
+            result_queue.put(("error", int(worker_id), f"finalize failed: {exc!r}"))
+            counts = [0 for _ in exporter.get("keys", [])]
+        result_queue.put(("done", int(worker_id), counts))
+
+
+def _run_grouped_state_direct_worker_writers(
+    work_units,
+    total_pairs: int,
+    num_cpus: int,
+    output_file: str,
+    direct_localte_exporter: dict,
+    result_buffer_rows: int,
+) -> bool:
+    """Run grouped-state TE with worker-owned LocalTE chunk writers.
+
+    This avoids sending large LocalTE byte payloads back to the parent process.
+    Workers return only score rows; each worker writes its own chunk partitions.
+    """
+    if direct_localte_exporter is None:
+        return False
+    n_workers = max(1, min(int(num_cpus), int(len(work_units))))
+    use_score_parts = _is_on(LOCAL_TE_DIRECT_SCORE_PARTS)
+    score_parts_dir = None
+    if use_score_parts:
+        score_parts_dir = str(Path(output_file).with_suffix("").parent / "TE_score_parts")
+        Path(score_parts_dir).mkdir(parents=True, exist_ok=True)
+        for stale_part in Path(score_parts_dir).glob("part_w*.parquet"):
+            try:
+                stale_part.unlink()
+            except Exception:
+                pass
+    if direct_localte_exporter.get("virtual_array"):
+        localte_format = "virtual array parts"
+    else:
+        localte_format = "video-tile parts" if direct_localte_exporter.get("video_tiles") else "chunk parts"
+    print(
+        f"[TE] LocalTE direct worker writers: {n_workers} workers write {localte_format}; "
+        + (
+            "workers also write score parts."
+            if use_score_parts
+            else "main process writes score-only TE_result_all.parquet."
+        )
+    )
+    ctx = multiprocessing.get_context("fork")
+    task_queue = ctx.Queue()
+    result_queue = ctx.Queue()
+    processes = [
+        ctx.Process(
+            target=_direct_localte_worker_loop,
+            args=(
+                worker_id,
+                task_queue,
+                result_queue,
+                direct_localte_exporter,
+                score_parts_dir,
+                int(result_buffer_rows or 5000),
+            ),
+        )
+        for worker_id in range(n_workers)
+    ]
+
+    for proc in processes:
+        proc.start()
+    for task in work_units:
+        task_queue.put(task)
+    for _ in processes:
+        task_queue.put(None)
+
+    direct_writer_state = {"writer": None, "rows": 0}
+    columns = ["Source", "Target", "TE"]
+    row_buffer = []
+    buffered_count = 0
+    worker_counts: list[list[int]] = []
+    done_workers = 0
+    processed_pairs = 0
+    start_time = time.time()
+    show_progress = str(KERNEL_GROUPED_STATE_PROGRESS).lower() not in ("off", "0", "false", "no")
+    pair_pbar = tqdm(
+        total=int(total_pairs),
+        desc="TE pairs (compute+write)",
+        unit="pair",
+        dynamic_ncols=True,
+        mininterval=1.0,
+        leave=True,
+    ) if show_progress else None
+
+    def flush_score_rows(buffered_rows):
+        if not buffered_rows:
+            return []
+        _append_grouped_rows_to_parquet_writer(
+            buffered_rows,
+            columns,
+            direct_writer_state,
+            output_file,
+        )
+        return []
+
+    error_messages = []
+    try:
+        while done_workers < n_workers:
+            msg = result_queue.get()
+            tag = msg[0]
+            if tag == "rows":
+                n_rows = int(msg[1])
+                score_rows = msg[2]
+                processed_pairs += n_rows
+                if pair_pbar is not None and n_rows:
+                    pair_pbar.update(n_rows)
+                if score_rows:
+                    row_buffer.extend(score_rows)
+                    buffered_count += n_rows
+                    if buffered_count >= max(1, int(result_buffer_rows or 5000)):
+                        row_buffer = flush_score_rows(row_buffer)
+                        buffered_count = 0
+            elif tag == "progress":
+                n_rows = int(msg[1])
+                processed_pairs += n_rows
+                if pair_pbar is not None and n_rows:
+                    pair_pbar.update(n_rows)
+            elif tag == "done":
+                done_workers += 1
+                worker_counts.append([int(x) for x in msg[2]])
+            elif tag == "error":
+                error_messages.append(f"worker {msg[1]}: {msg[2]}")
+        if row_buffer:
+            flush_score_rows(row_buffer)
+    finally:
+        if pair_pbar is not None:
+            pair_pbar.close()
+        for proc in processes:
+            proc.join(timeout=2)
+        for proc in processes:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=2)
+        if direct_writer_state.get("writer") is not None:
+            direct_writer_state["writer"].close()
+            direct_writer_state["writer"] = None
+
+    if error_messages:
+        logging.error("Direct LocalTE worker writer failed: %s", "; ".join(error_messages[:5]))
+        return False
+    if use_score_parts:
+        score_parts = sorted(str(p) for p in Path(score_parts_dir).glob("part_w*.parquet"))
+        if not score_parts and int(total_pairs) > 0:
+            return False
+        if not concat_parquet_files_duckdb(score_parts, output_file):
+            return False
+    elif int(direct_writer_state.get("rows", 0)) <= 0 and int(total_pairs) > 0:
+        return False
+    _direct_localte_write_marker_from_worker_counts(direct_localte_exporter, worker_counts)
+    elapsed = time.time() - start_time
+    logging.info(
+        "Grouped-state direct-worker LocalTE results saved to %s in %.2f seconds (%d pairs).",
+        output_file,
+        elapsed,
+        processed_pairs,
+    )
+    return True
 
 
 def _get_dest_ctx_kernel(target_idx: int, historyLength: int, kernel_width: float):
@@ -2063,7 +3442,7 @@ def _process_chunk(args):
     """Worker: compute exact kernel TE for a single target and a chunk of sources."""
     target_idx, source_indices, historyLength, kernel_width, mode = args
     if mode != 'kernel':
-        raise ValueError("TENETPLUS_KERNEL runner only supports kernel mode.")
+        raise ValueError("This TENETPLUS runner only supports kernel mode.")
     results = []
     try:
         dest_ctx = _get_dest_ctx_kernel(target_idx, historyLength, kernel_width)
@@ -2402,7 +3781,8 @@ def _perm_worker_kernel(args_w):
     """
     tgt, srcs, k_hist, perm_n, base_seed, kw = args_w
     res = []
-    use_grouped_perm = _kernel_grouped_state_enabled("kernel", "default", int(k_hist)) and not STORE_LOCAL_TE
+    # Payload storage must not choose the observed/null scoring engine.
+    use_grouped_perm = _kernel_grouped_state_enabled("kernel", "default", int(k_hist))
     if use_grouped_perm:
         try:
             grouped_ctx = _kernel_grouped_target_context_for_permutation(tgt, k_hist, kw)
@@ -2430,7 +3810,20 @@ def _perm_worker_kernel(args_w):
                     num_perms=int(perm_n),
                     seed=int(base_seed) + int(s),
                 )
-                res.append((s, tgt, te, p))
+                if STORE_LOCAL_TE:
+                    values, codes = _get_grouped_source_codes_kernel(int(s), int(k_hist), float(kw))
+                    local_result = _grouped_state_te_local_from_coded(
+                        values, codes, grouped_ctx["target_codes"],
+                        grouped_ctx["target_past_values"], grouped_ctx["target_next_values"],
+                        max_unique=int(KERNEL_GROUPED_STATE_MAX_UNIQUE),
+                        target_factor_context=grouped_ctx.get("target_factor_context"),
+                    )
+                    if local_result is None:
+                        raise RuntimeError("LocalTE payload exceeds the grouped-state limit")
+                    local_bytes, local_len, local_dtype, local_codec = _encode_local_te(local_result[1])
+                    res.append((s, tgt, te, p, local_bytes, local_len, local_dtype, local_codec))
+                else:
+                    res.append((s, tgt, te, p))
             elif STORE_LOCAL_TE:
                 series = _get_series(s)
                 series = _maybe_subsample(series)
@@ -2688,6 +4081,7 @@ def run_kernel_grouped_state(
     output_file,
     pool_chunksize,
     result_buffer_rows,
+    direct_localte_exporter=None,
 ):
     """Run exact k=1 kernel TE by weighted unique-state counting."""
     if list_pairs is None or len(list_pairs) == 0:
@@ -2699,18 +4093,51 @@ def run_kernel_grouped_state(
     if enable_intermediate_save:
         os.makedirs(progress_dir, exist_ok=True)
 
-    target_to_sources: dict[int, list[int]] = {}
-    for src, tgt in list_pairs:
-        target_to_sources.setdefault(int(tgt), []).append(int(src))
+    # Stable grouping preserves both first-seen target order and within-target
+    # source order, without 20 million Python pair unpack/dictionary operations.
+    group_order = np.argsort(list_pairs[:, 1], kind="stable")
+    sorted_targets = list_pairs[group_order, 1]
+    sorted_sources = list_pairs[group_order, 0]
+    group_starts = np.r_[0, np.flatnonzero(sorted_targets[1:] != sorted_targets[:-1]) + 1]
+    group_ends = np.r_[group_starts[1:], len(group_order)]
+    first_seen_order = np.argsort(group_order[group_starts], kind="stable")
     work_units = [
-        (tgt, srcs, int(historyLength), float(kernel_width))
-        for tgt, srcs in target_to_sources.items()
+        (int(sorted_targets[group_starts[g]]), sorted_sources[group_starts[g]:group_ends[g]],
+         int(historyLength), float(kernel_width))
+        for g in first_seen_order
     ]
+    del group_order, sorted_targets
     logging.info(
         "Using grouped-state exact kernel mode: targets=%d, pairs=%d.",
         len(work_units),
         len(list_pairs),
     )
+    global _PREFIX_DATA
+    prefix_enabled = (
+        os.getenv("TE_EXACT_PREFIX", "on").lower() == "on"
+        and not STORE_LOCAL_TE and not _is_on(LOCAL_TE_VIRTUAL)
+        and direct_localte_exporter is None
+        and not _is_auto_localte_stream_dir(progress_dir)
+        and GLOBAL_CELL_GENE_DENSE is not None
+        and TIME_SUBSAMPLE_INDICES is None
+        and GLOBAL_CELL_GENE_DENSE.shape[1] - 1 >= KERNEL_GROUPED_STATE_FACTORIZED_MIN_OBS
+        and str(KERNEL_GROUPED_STATE_FACTORIZED).lower() not in ("off", "0", "false", "no")
+        and str(KERNEL_GROUPED_STATE_SOURCE_PREFIX).lower() not in ("off", "0", "false", "no")
+        and str(KERNEL_GROUPED_STATE_2D_RANGE).lower() not in ("off", "0", "false", "no")
+        and str(KERNEL_GROUPED_STATE_CODED).lower() not in ("off", "0", "false", "no")
+        and str(KERNEL_GROUPED_STATE_SPARSE).lower() in ("off", "0", "false", "no")
+        and GLOBAL_CELL_GENE_DENSE.shape[1] - 1 <= min(8192, KERNEL_GROUPED_STATE_MAX_UNIQUE)
+        and KERNEL_GROUPED_STATE_FACTORIZED_MAX >= 250000
+        and np.all(np.isfinite(GLOBAL_CELL_GENE_DENSE))
+    )
+    if prefix_enabled:
+        from .exact_prefix import prepare_sources, prepare_target, count_batch
+        prefix_start = time.time()
+        _PREFIX_DATA = prepare_sources(GLOBAL_CELL_GENE_DENSE, sys.modules[__name__])
+        warm_target, _ = prepare_target(GLOBAL_CELL_GENE_DENSE[0], sys.modules[__name__])
+        count_batch(np.asarray([0], dtype=np.int64), _PREFIX_DATA[0], warm_target)
+        logging.info("Exact sparse-prefix preparation took %.3f seconds.", time.time() - prefix_start)
+        print("[TE] Exact sparse-prefix counts enabled; original NumPy scoring retained.")
     local_label = "LocalTE on" if STORE_LOCAL_TE else "LocalTE off"
     print(
         f"[TE] Engine: grouped-state exact kernel ({local_label}); "
@@ -2756,21 +4183,45 @@ def run_kernel_grouped_state(
         logging.warning("Grouped source code memmap disabled after preparation failure: %s", exc)
         _clear_grouped_source_code_memmap()
 
+    if direct_localte_exporter is not None and _is_on(LOCAL_TE_DIRECT_WORKERS):
+        try:
+            return _run_grouped_state_direct_worker_writers(
+                work_units,
+                int(len(list_pairs)),
+                int(num_cpus),
+                output_file,
+                direct_localte_exporter,
+                int(result_buffer_rows or grouped_write_rows or 5000),
+            )
+        finally:
+            if grouped_source_code_memmap_path:
+                _clear_grouped_source_code_memmap()
+
     direct_writer_state = {"writer": None, "rows": 0}
-    columns = _grouped_result_columns()
+    columns = ["Source", "Target", "TE"] if direct_localte_exporter is not None else _grouped_result_columns()
 
     def flush_grouped_rows(buffered_rows):
         if not buffered_rows:
             return []
+        if prefix_enabled:
+            batch_df = pd.DataFrame({
+                "Source": np.concatenate([b.sources for b in buffered_rows]),
+                "Target": np.concatenate([np.full(len(b), b.target, dtype=np.int64) for b in buffered_rows]),
+                "TE": np.concatenate([b.scores for b in buffered_rows]),
+            })
+            rows_to_write = None
+        else:
+            rows_to_write = _direct_localte_append_rows(direct_localte_exporter, buffered_rows)
         if direct_localte_output:
             _append_grouped_rows_to_parquet_writer(
-                buffered_rows,
+                rows_to_write,
                 columns,
                 direct_writer_state,
                 output_file,
             )
             return []
-        batch_df = pd.DataFrame.from_records(buffered_rows, columns=columns)
+        if not prefix_enabled:
+            batch_df = pd.DataFrame.from_records(rows_to_write, columns=columns)
         if enable_intermediate_save:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             try:
@@ -2802,7 +4253,7 @@ def run_kernel_grouped_state(
     try:
         with multiprocessing.Pool(processes=num_cpus) as pool:
             iterator = pool.imap_unordered(
-                _process_grouped_state_target,
+                _process_prefix_target if prefix_enabled else _process_grouped_state_target,
                 work_units,
                 chunksize=grouped_chunksize,
             )
@@ -2838,13 +4289,16 @@ def run_kernel_grouped_state(
                     if not target_rows:
                         continue
                     if grouped_write_rows > 0:
-                        row_buffer.extend(target_rows)
+                        if prefix_enabled:
+                            row_buffer.append(target_rows)
+                        else:
+                            row_buffer.extend(target_rows)
                         buffered_count += n_rows
                         if buffered_count >= grouped_write_rows:
                             row_buffer = flush_grouped_rows(row_buffer)
                             buffered_count = 0
                     else:
-                        flush_grouped_rows(target_rows)
+                        flush_grouped_rows([target_rows] if prefix_enabled else target_rows)
             finally:
                 if target_pbar is not None:
                     target_pbar.close()
@@ -2860,6 +4314,7 @@ def run_kernel_grouped_state(
     if direct_writer_state.get("writer") is not None:
         direct_writer_state["writer"].close()
         direct_writer_state["writer"] = None
+    _direct_localte_finalize(direct_localte_exporter)
 
     if direct_localte_output:
         if int(direct_writer_state.get("rows", 0)) <= 0:
@@ -2896,6 +4351,7 @@ def run_kernel_grouped_state_implicit(
     output_file,
     pool_chunksize,
     result_buffer_rows,
+    direct_localte_exporter=None,
 ):
     """Run exact grouped-state kernel TE for implicit all-pair modes.
 
@@ -2971,20 +4427,21 @@ def run_kernel_grouped_state_implicit(
         _clear_grouped_source_code_memmap()
 
     direct_writer_state = {"writer": None, "rows": 0}
-    columns = _grouped_result_columns()
+    columns = ["Source", "Target", "TE"] if direct_localte_exporter is not None else _grouped_result_columns()
 
     def flush_grouped_rows(buffered_rows):
         if not buffered_rows:
             return []
+        rows_to_write = _direct_localte_append_rows(direct_localte_exporter, buffered_rows)
         if direct_localte_output:
             _append_grouped_rows_to_parquet_writer(
-                buffered_rows,
+                rows_to_write,
                 columns,
                 direct_writer_state,
                 output_file,
             )
             return []
-        batch_df = pd.DataFrame.from_records(buffered_rows, columns=columns)
+        batch_df = pd.DataFrame.from_records(rows_to_write, columns=columns)
         if enable_intermediate_save:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             try:
@@ -3079,6 +4536,7 @@ def run_kernel_grouped_state_implicit(
     if direct_writer_state.get("writer") is not None:
         direct_writer_state["writer"].close()
         direct_writer_state["writer"] = None
+    _direct_localte_finalize(direct_localte_exporter)
 
     if direct_localte_output:
         if int(direct_writer_state.get("rows", 0)) <= 0:
@@ -3141,8 +4599,8 @@ def run_kernel_source_blocked(
     os.makedirs(block_root, exist_ok=True)
     block_outputs: list[str] = []
     total_blocks = int((unique_sources.size + source_block_size - 1) // source_block_size)
-    # CD4-like pair lists can be highly skewed by source index. Balance blocks
-    # by pair count so one huge source block does not dominate the full run.
+    # Source-heavy pair lists can be highly skewed by source index. Balance
+    # blocks by pair count so one huge source block does not dominate the run.
     blocks: list[list[int]] = [[] for _ in range(total_blocks)]
     block_pair_counts = [0 for _ in range(total_blocks)]
     source_order = np.argsort(-source_counts)
@@ -3497,7 +4955,7 @@ def load_progress(input_csv, progress_dir):
         logging.info(f"Loaded {len(list_pairs)} pairs from {input_csv}.")
     except Exception as e:
         logging.error(f"Error loading input CSV {input_csv}: {e}")
-        return np.array([])
+        raise
 
     pairs_df = pd.DataFrame(list_pairs, columns=['Source', 'Target'])
 
@@ -3510,7 +4968,8 @@ def load_progress(input_csv, progress_dir):
             processed_pairs.append(df[['Source', 'Target']])
             logging.info(f"Loaded processed pairs from {fname}.")
         except Exception as e:
-            logging.error(f"Error reading file {fname}: {e}. Skipping this file.")
+            logging.error(f"Error reading progress file {fname}: {e}")
+            raise
 
     if processed_pairs:
         processed_pairs_df = pd.concat(processed_pairs, ignore_index=True).drop_duplicates()
@@ -3569,7 +5028,7 @@ def main(args):
     except Exception as e:
         print(f"Error loading expression data: {e}")
         logging.error(f"Error loading expression data: {e}")
-        return
+        raise
     load_data_end_time = time.time()
     logging.info(f"Loading expression data took {load_data_end_time - load_data_start_time:.2f} seconds.")
 
@@ -3592,7 +5051,10 @@ def main(args):
 
     global STORE_LOCAL_TE
     STORE_LOCAL_TE = bool(getattr(args, 'store_local_te', False))
-    if STORE_LOCAL_TE:
+    if _is_on(LOCAL_TE_VIRTUAL):
+        print("[TE] LocalTE: VIRTUAL exact array. TE scores stay score-only; timepoint values are reconstructed from compact state tables.")
+        logging.info("Virtual LocalTE storage enabled; outputs will include compact state tables.")
+    elif STORE_LOCAL_TE:
         logging.info("Local TE storage enabled; outputs will include LocalTE arrays.")
         print("[TE] LocalTE: ON. Per-pair timepoint arrays will be written to the TE parquet.")
     else:
@@ -3669,7 +5131,7 @@ def main(args):
                 logging.info(f"Loaded {len(list_pairs)} pairs from {args.input_csv}.")
             except Exception as e:
                 logging.error(f"Error loading input CSV {args.input_csv}: {e}")
-                return np.array([])
+                raise
 
         total_pairs = len(list_pairs)
         print(f"[TE] Pairs: {_human_int(total_pairs)} from all_pairs.csv")
@@ -3690,6 +5152,7 @@ def main(args):
                     except Exception as e:
                         print(f"Error reading file {fname}: {e}")
                         logging.error(f"Error reading file {fname}: {e}")
+                        raise
 
             if all_batches:
                 try:
@@ -3701,7 +5164,7 @@ def main(args):
                 except Exception as e:
                     print(f"Error saving final results: {e}")
                     logging.error(f"Error saving final results: {e}")
-                    return
+                    raise
 
                 # Optionally, delete intermediate merged files
                 for fname in os.listdir(progress_dir):
@@ -3725,7 +5188,8 @@ def main(args):
         if names and len(names) == n_features:
             all_idx = np.arange(1, n_features + 1, dtype=int)
             if pair_mode == "gene_only":
-                mask = np.array([not str(n).startswith("chr") for n in names], dtype=bool)
+                peak_names = load_peak_names(names, locate_file("TE_peak_list.txt"))
+                mask = np.array([n not in peak_names for n in names], dtype=bool)
                 indices = all_idx[mask]
             elif pair_mode == "all_feature":
                 indices = all_idx
@@ -3787,6 +5251,12 @@ def main(args):
     # Run exact kernel TE.
     stage1_enable_save = args.enable_intermediate_save or stream_localte_batches
     fast_output = "TE_result_all.parquet"
+    direct_localte_exporter = _build_direct_localte_exporter(args, pair_mode, total_pairs)
+    if direct_localte_exporter is not None:
+        if direct_localte_exporter.get("virtual_array"):
+            print("[TE] LocalTE output mode: direct virtual array; TE_result_all.parquet will remain score-only.")
+        else:
+            print("[TE] LocalTE output mode: direct time-chunk streaming; TE_result_all.parquet will remain score-only.")
 
     source_blocked_done = False
     kernel_source_block_size = 0
@@ -3807,6 +5277,7 @@ def main(args):
             output_file=fast_output,
             pool_chunksize=max(1, int(POOL_CHUNKSIZE)),
             result_buffer_rows=buffer_size,
+            direct_localte_exporter=direct_localte_exporter,
         )
 
     if (
@@ -3828,6 +5299,7 @@ def main(args):
             output_file=fast_output,
             pool_chunksize=max(1, int(POOL_CHUNKSIZE)),
             result_buffer_rows=buffer_size,
+            direct_localte_exporter=direct_localte_exporter,
         )
 
     if (not grouped_state_done) and pair_mode == "default" and list_pairs is not None:
@@ -3903,6 +5375,20 @@ def main(args):
         print(f"Fast-mode results saved to {fast_output}.")
         logging.info(f"Fast-mode results saved to {fast_output}.")
 
+    if _virtual_code_index_enabled() and os.path.exists(fast_output):
+        try:
+            code_sources, code_targets = _virtual_code_index_feature_sets(pair_mode, list_pairs, pair_index_info)
+            _write_virtual_code_index(
+                code_sources,
+                code_targets,
+                int(args.history_length),
+                0.5,
+                os.getenv("LOCAL_TE_CODE_INDEX_OUTPUT_DIR", LOCAL_TE_CODE_INDEX_OUTPUT_DIR),
+            )
+        except Exception as exc:
+            logging.warning("Virtual LocalTE code index generation failed: %s", exc)
+            print(f"[LocalTE] Warning: code index generation failed ({exc}). Virtual LocalTE data is still valid.")
+
     # Permutation test to build network
     if getattr(args, 'permute', False):
         try:
@@ -3938,7 +5424,6 @@ def main(args):
 
         kernel_grouped_perm_requested = (
             _kernel_grouped_state_enabled("kernel", "default", int(args.history_length))
-            and not STORE_LOCAL_TE
             and len(perm_pairs) > 0
         )
         perm_grouped_source_memmap_path = None
@@ -4127,6 +5612,7 @@ def main(args):
             logging.info(f"Permutation results saved to {args.perm_output}")
         except Exception as e:
             logging.error(f"Failed to write permutation output {args.perm_output}: {e}")
+            raise
 
         # Build network by p-value threshold
         try:
@@ -4150,6 +5636,7 @@ def main(args):
             logging.info(edge_msg)
         except Exception as e:
             logging.error(f"Failed to write network edges: {e}")
+            raise
     print(f"[TE] Kernel TE completed in {time.time() - start_time:.2f} seconds.")
     logging.info(f"Calculate TE execution time: {time.time() - start_time:.2f} seconds")
 
@@ -4205,6 +5692,8 @@ if __name__ == "__main__":
     parser.add_argument('--pool_maxtasks', type=int, default=None, help="Recycle worker processes after N tasks to reduce RSS growth.")
     parser.add_argument('--results_buffer_rows', type=int, default=None, help="Maximum TE rows to buffer in memory before flushing (default: 200000, or 5000 when storing local TE).")
     parser.add_argument('--batch_size', type=int, default=100, help="Sources per target chunk for TE computation (default: 100).")
+    parser.add_argument('--species', type=str, default="", help="Species used to resolve TF list for direct LocalTE chunk export.")
+    parser.add_argument('--split_type', type=str, default="1", help="Network mode/split type used by Matrix_generate.")
     parser.add_argument(
         '--pair_mode',
         choices=['default', 'gene_only', 'all_feature'],

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "species": "Homo sapiens",
+  "assembly": "GRCh38.p14",
+  "assembly_unit": "all",
+  "annotation_release": "GENCODE v44 (Ensembl 110), legacy gene-name rows",
+  "format": "gtf",
+  "sources": {
+    "annotation": {
+      "sha256": "01f817afed65feee863361b4baf30a95e722ee5c5d508ff77b04106ef7ba20d3",
+      "url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/gencode.v44.annotation.gtf.gz",
+      "filename": "gencode.v44.annotation.gtf.gz"
+    }
+  },
+  "mapping_style": "gene-symbol-rows",
+  "annotation_headers": [
+    "##description: evidence-based annotation of the human genome (GRCh38), version 44 (Ensembl 110)",
+    "##provider: GENCODE",
+    "##contact: gencode-help@ebi.ac.uk",
+    "##format: gtf",
+    "##date: 2023-03-01"
+  ],
+  "gene_records_read": 62700,
+  "gene_identifiers": 61228,
+  "contigs": 25,
+  "multi_contig_identifiers": 72,
+  "files": {
+    "gene_chr.txt": "23050441eba9dd4a9e5632e4062926dd77fabe321a9fcdbb1b6f1bcade22bab3",
+    "contigs.json": "2d94b332cf85e7efb2e38bbd9629036600474ba8f99ff53d6983d5209d46d602"
+  },
+  "legacy_mapping_policy_supported": true,
+  "legacy_runtime_policy": "human_legacy is the default for this verified bundle; TENET_CIS_MAPPING_POLICY=strict opts into strict validation"
+}

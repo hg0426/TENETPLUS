@@ -1,4 +1,6 @@
 import csv
+from code.feature_utils import load_manifest, load_peak_names
+from code.species_support import load_tf_names, needs_tf
 import os
 import sys
 import time
@@ -9,17 +11,6 @@ import pandas as pd
 from code.path_utils import coerce_input_path, coerce_output_path, locate_file
 
 
-def load_gene_chr_mapping(filename):
-    """Load mapping from gene name to chromosome."""
-    path = coerce_input_path(filename)
-    with open(path, "r", encoding="utf-8") as f:
-        return {
-            gene: chromosome
-            for chromosome, gene in (line.strip().split() for line in f)
-            if not gene.startswith("chr")
-        }
-
-
 def load_file_to_list(filename, delimiter: str = "\n"):
     """Load a file into a list, stripping trailing newlines."""
     path = locate_file(filename)
@@ -27,11 +18,11 @@ def load_file_to_list(filename, delimiter: str = "\n"):
         return [line.replace(delimiter, "") for line in f]
 
 
-def create_TENET_Plus_pairs(Peaks, genes_per_chromosome, gene_names_dict, tf_list):
+def create_TENET_Plus_pairs(Peaks, genes_per_chromosome, gene_names_dict, tf_list, peak_coords):
     """Create gene–gene pairs based on TENET+ logic."""
     gene_pairs = []
     for peak in Peaks:
-        peak_chr = peak.split("-")[0]
+        peak_chr = peak_coords[peak][0]
         peak_idx = gene_names_dict.get(peak, None)
         if peak_idx is not None:
             gene_pairs.extend(
@@ -98,11 +89,11 @@ def create_tf_gene_peak_pairs(gene_names_dict, tf_list):
     return gene_pairs
 
 
-def create_cis_peaksource_pairs(Peaks, genes_per_chromosome, gene_names_dict):
+def create_cis_peaksource_pairs(Peaks, genes_per_chromosome, gene_names_dict, peak_coords):
     """Create cis peak->gene pairs."""
     gene_pairs = []
     for peak in Peaks:
-        peak_chr = peak.split("-")[0]
+        peak_chr = peak_coords[peak][0]
         peak_idx = gene_names_dict.get(peak, None)
         if peak_idx is not None:
             gene_pairs.extend(
@@ -159,7 +150,7 @@ def load_sif_connections(filename, gene_names_dict):
     return tf_gene_pairs, tf_peak_pairs, peak_gene_pairs
 
 
-def create_peak_peak_pairs(Peaks, only_peak_names_dict, max_distance: int | None = 1_000_000):
+def create_peak_peak_pairs(Peaks, only_peak_names_dict, max_distance: int | None = 1_000_000, *, peak_coords):
     """
     Create directed cis peak->peak pairs within an optional distance limit.
     Distance is calculated as the minimal gap between the two peak intervals.
@@ -169,14 +160,10 @@ def create_peak_peak_pairs(Peaks, only_peak_names_dict, max_distance: int | None
     peak_pairs = []
     peaks_by_chr = {}
     for peak in Peaks:
-        parts = peak.split("-")
-        if len(parts) < 3:
+        parsed = peak_coords[peak]
+        if parsed is None:
             continue
-        chrom, start_str, end_str = parts[0], parts[1], parts[2]
-        try:
-            start, end = int(start_str), int(end_str)
-        except ValueError:
-            continue
+        chrom, start, end = parsed
         if peak in only_peak_names_dict:
             peaks_by_chr.setdefault(chrom, []).append((peak, start, end))
     for chrom, plist in peaks_by_chr.items():
@@ -222,7 +209,6 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
         )
         return
 
-    gene_chr_mapping = load_gene_chr_mapping("gene_chr.txt")
 
     transposed_matrix_path = coerce_output_path("cell_gene_trsps.parquet")
     if not transposed_matrix_path.exists():
@@ -230,9 +216,18 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
 
     gene_names = load_file_to_list("gene_names")
     Peaks = load_file_to_list("TE_peak_list.txt")
-    tf_list = load_file_to_list(
-        f"GO_symbol_{species}_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
-    )
+    manifest = load_manifest(gene_names)
+    peak_coords = {r['feature_id']: (r['contig'], r['start'], r['end'])
+                   for r in manifest['features'] if r['feature_type'] == 'peak'}
+    if mode in {'1', '5'} and not sif_file and manifest.get('cis_mapping_policy','strict')=='strict':
+        bad = [r['feature_id'] for r in manifest['features']
+               if r['feature_type'] == 'RNA' and len(r['gene_contigs']) != 1]
+        if bad:
+            raise ValueError(f'RNA needs unique reference contig for cis candidates: {bad[:10]}')
+    gene_chr_mapping = {r['feature_id']: r.get('cis_contig',r['gene_contigs'][0] if len(r['gene_contigs'])==1 else None)
+                        for r in manifest['features']
+                        if r['feature_type'] == 'RNA' and r.get('cis_contig',r['gene_contigs'][0] if len(r['gene_contigs'])==1 else None) is not None}
+    tf_list = load_tf_names(species) if needs_tf(mode) else []
 
     gene_names_dict = {name: idx for idx, name in enumerate(gene_names)}
     only_peak_names_dict = {
@@ -244,7 +239,7 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
 
     genes_per_chromosome = {}
     for gene, chromosome in gene_chr_mapping.items():
-        if gene in gene_names_dict:
+        if gene in only_gene_names_dict:
             genes_per_chromosome.setdefault(chromosome, []).append(gene)
 
     if sif_file:
@@ -260,7 +255,7 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
         print("[Pairs] Creating TENET+ candidate pairs.")
         if mode == "1":
             gene_pairs_indices = create_TENET_Plus_pairs(
-                Peaks, genes_per_chromosome, gene_names_dict, tf_list
+                Peaks, genes_per_chromosome, gene_names_dict, tf_list, peak_coords
             )
         elif mode == "2":
             gene_pairs_indices = create_tf_gene_pairs(
@@ -274,11 +269,11 @@ def run_preprocess(species: str, mode: str, matrix_file: str, sif_file: str | No
             gene_pairs_indices = create_tf_gene_peak_pairs(gene_names_dict, tf_list)
         elif mode == "5":
             gene_pairs_indices = create_cis_peaksource_pairs(
-                Peaks, genes_per_chromosome, gene_names_dict
+                Peaks, genes_per_chromosome, gene_names_dict, peak_coords
             )
         elif mode == "6":
             gene_pairs_indices = create_peak_peak_pairs(
-                Peaks, only_peak_names_dict, max_distance=None
+                Peaks, only_peak_names_dict, max_distance=None, peak_coords=peak_coords
             )
         else:
             print("Error: Invalid option for mode.")

@@ -10,44 +10,6 @@
 
 set -euo pipefail
 
-LOCAL_TE_CHUNK_SIZE=${LOCAL_TE_CHUNK_SIZE:-300}
-LOCAL_TE_BUFFER_EDGES=${LOCAL_TE_BUFFER_EDGES:-10000}
-# Export tuning for localTE chunking
-LOCAL_TE_EXPORT_WORKERS=${LOCAL_TE_EXPORT_WORKERS:-auto}      # auto = min(jobs,16); 0/1 = single process; >1 = multiprocessing
-LOCAL_TE_READ_BATCH_ROWS=${LOCAL_TE_READ_BATCH_ROWS:-8192}
-LOCAL_TE_USE_THREADS=${LOCAL_TE_USE_THREADS:-on}
-LOCAL_TE_VALUES_DTYPE=${LOCAL_TE_VALUES_DTYPE:-float16}
-LOCAL_TE_MERGE_WORKERS=${LOCAL_TE_MERGE_WORKERS:-}
-LOCAL_TE_MERGE_PARTS=${LOCAL_TE_MERGE_PARTS:-off}
-LOCAL_TE_CODEC=${LOCAL_TE_CODEC:-${TE_LOCALTE_CODEC:-zlib}}
-LOCAL_TE_ADVANCED=${LOCAL_TE_ADVANCED:-${TENET_LOCALTE_ADVANCED:-off}}
-# Optional: export per-selector chunk dirs (payload filtered by selector files)
-LOCAL_TE_SPLIT_EXPORT=${LOCAL_TE_SPLIT_EXPORT:-on}
-LOCAL_TE_SPLIT_OUTPUT_DIR=${LOCAL_TE_SPLIT_OUTPUT_DIR:-local_te_split_chunks}
-
-# Global default for pair mode (overridable via interactive prompt or TENET_PAIR_MODE env)
-DEFAULT_PAIR_MODE=${TENET_PAIR_MODE:-default}
-DEFAULT_INTERMEDIATE_SAVE=${TENET_INTERMEDIATE_SAVE:-off}
-DEFAULT_MAKE_GRN=${TENET_MAKE_GRN:-on}
-DEFAULT_GRN_FDR=${TENET_GRN_FDR:-0.01}
-DEFAULT_GRN_TE_CUTOFF=${TENET_GRN_TE_CUTOFF:-0.0}
-DEFAULT_TRIM_INDIRECT=${TENET_TRIM_INDIRECT:-on}
-DEFAULT_TRIM_THRESHOLD=${TENET_TRIM_THRESHOLD:--0.01}
-DEFAULT_GRN_THREADS=${TENET_GRN_THREADS:-}
-
-# Kernel mode defaults. These make the exact grouped-state implementation the
-# package default while still allowing advanced users to opt out via env vars.
-export TE_KERNEL_GROUPED_STATE=${TE_KERNEL_GROUPED_STATE:-on}
-export TE_KERNEL_GROUPED_STATE_CODED=${TE_KERNEL_GROUPED_STATE_CODED:-on}
-export TE_KERNEL_GROUPED_STATE_FACTORIZED=${TE_KERNEL_GROUPED_STATE_FACTORIZED:-auto}
-export TE_KERNEL_GROUPED_STATE_SOURCE_PREFIX=${TE_KERNEL_GROUPED_STATE_SOURCE_PREFIX:-auto}
-export TE_KERNEL_SOURCE_CODE_INTEGER=${TE_KERNEL_SOURCE_CODE_INTEGER:-auto}
-export TE_KERNEL_GROUPED_STATE_SPARSE=${TE_KERNEL_GROUPED_STATE_SPARSE:-off}
-export TE_KERNEL_GROUPED_STATE_2D_RANGE=${TE_KERNEL_GROUPED_STATE_2D_RANGE:-on}
-export TE_KERNEL_PERM_TABLE_SAMPLER=${TE_KERNEL_PERM_TABLE_SAMPLER:-off}
-export TE_PERM_KERNEL_GROUPED_SOURCES_PER_CHUNK=${TE_PERM_KERNEL_GROUPED_SOURCES_PER_CHUNK:-2}
-export TE_PERM_SORT_WORK=${TE_PERM_SORT_WORK:-on}
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 CODE_DIR="$REPO_ROOT/code"
@@ -58,534 +20,15 @@ if [[ "$OUTPUT_DIR" != /* ]]; then
 fi
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 PYTHON=${PYTHON:-python3}
-
-get_config_list() {
-    local attr="$1"
-    "$PYTHON" - <<PY
-import importlib
-cfg = importlib.import_module("code.config_options")
-vals = getattr(cfg, "${attr}", [])
-print(", ".join(vals))
-PY
-}
-
-trim_whitespace() {
-    "$PYTHON" - <<'PY' "$1"
-import sys
-print(sys.argv[1].strip())
-PY
-}
-
-abs_path() {
-    "$PYTHON" - <<'PY' "$1"
-import os, sys
-print(os.path.abspath(os.path.expanduser(sys.argv[1])))
-PY
-}
-
-prompt_with_default() {
-    local label="$1"
-    local default_value="$2"
-    local input
-    if [ -n "$default_value" ]; then
-        read -e -r -i "$default_value" -p "$label [$default_value]> " input
-    else
-        read -e -r -p "$label> " input
-    fi
-    input=$(trim_whitespace "${input:-$default_value}")
-    echo "$input"
-}
-
-print_step() {
-    local step="$1"
-    local title="$2"
-    shift 2
-    echo ""
-    echo "=== Step $step: $title ==="
-    while [ $# -gt 0 ]; do
-        echo "  • $1"
-        shift
-    done
-}
-
-prompt_input_matrix() {
-    local default="${INPUT_FILE:-input/}"
-    while true; do
-        print_step "1" "Select Input Matrix" \
-            "Expected: TE-ready expression matrix" \
-            "Typical location: input/" \
-            "Supports CSV/TSV/TXT/Parquet"
-        local value=$(prompt_with_default "Path" "$default")
-        if [ -n "$value" ]; then
-            INPUT_FILE="$value"
-            break
-        fi
-        echo "[!] Input matrix file path is required."
-        default="$value"
-    done
-}
-
-prompt_jobs() {
-    local suggested=$(command -v nproc >/dev/null && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)
-    local default="${NUM_JOBS:-}" 
-    while true; do
-        print_step "2" "Set Parallel Jobs" \
-            "Defines worker processes for TE screening" \
-            "Use available CPU cores (e.g. 8, 16)" \
-            "Typical on this machine: $suggested"
-        local value=$(prompt_with_default "Jobs" "$default")
-        if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
-            NUM_JOBS="$value"
-            break
-        fi
-        echo "[!] Please enter a positive integer for the number of jobs."
-        default="$value"
-    done
-}
-
-prompt_trajectory_file() {
-    local default="${TRAJECTORY_FILE:-input/}"
-    while true; do
-        print_step "3" "Select Trajectory File" \
-            "Filtered pseudotime ordering (one value per cell)" \
-            "Ensure values are aligned with the matrix rows"
-        local value=$(prompt_with_default "Path" "$default")
-        if [ -n "$value" ]; then
-            TRAJECTORY_FILE="$value"
-            break
-        fi
-        echo "[!] Trajectory file path is required."
-        default="$value"
-    done
-}
-
-prompt_cell_select_file() {
-    local default="${CELL_SELECT_FILE:-input/}"
-    while true; do
-        print_step "4" "Select Cell-Select File" \
-            "Binary mask (1/0) indicating cells to include" \
-            "Should match the order of the expression matrix"
-        local value=$(prompt_with_default "Path" "$default")
-        if [ -n "$value" ]; then
-            CELL_SELECT_FILE="$value"
-            break
-        fi
-        echo "[!] Cell select file path is required."
-        default="$value"
-    done
-}
-
-prompt_history_length() {
-    local default="${HISTORY_LENGTH:-1}"
-    while true; do
-        print_step "5" "Choose History Length k" \
-            "Number of past timepoints to consider" \
-            "Common choices: 1 or 2" \
-            "Default: 1 (or type 'auto' to select based on series length)"
-        local value
-        value=$(prompt_with_default "k (or 'auto')" "$default")
-        if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
-            HISTORY_LENGTH="$value"
-            break
-        fi
-        if [[ "${value,,}" == "auto" ]]; then
-            HISTORY_LENGTH="auto"
-            break
-        fi
-        echo "[!] Please enter a positive integer or 'auto' for history length."
-        default="$value"
-    done
-}
+case "${1:-}" in
+    --config|--check-config|--write-config)
+        exec "$PYTHON" "$CODE_DIR/run_config.py" "$@" ;;
+esac
 
 
-set_analysis_mode_from_choice() {
-    local choice="${1,,}"
-    case "$choice" in
-        rna_tf|tf_rna|tf|rna|tenet_tf|0)
-            PAIR_MODE="default"; MODE_CODE="0"; ANALYSIS_MODE_CHOICE="rna_tf" ;;
-        plus_full|full|tenet_plus_full|1)
-            PAIR_MODE="default"; MODE_CODE="1"; ANALYSIS_MODE_CHOICE="plus_full" ;;
-        tf_gene|tf_gn|tf-gene|gene_grn|grn|2)
-            PAIR_MODE="default"; MODE_CODE="2"; ANALYSIS_MODE_CHOICE="tf_gene" ;;
-        tf_peak|tf_pk|tf-peak|3)
-            PAIR_MODE="default"; MODE_CODE="3"; ANALYSIS_MODE_CHOICE="tf_peak" ;;
-        tf_targets|tf_gene_peak|tf_gn_pk|tf-gene-peak|tf_gene+peak|4)
-            PAIR_MODE="default"; MODE_CODE="4"; ANALYSIS_MODE_CHOICE="tf_targets" ;;
-        peak_gene|peak_gn|peak-gene|cis_peak_gene|5)
-            PAIR_MODE="default"; MODE_CODE="5"; ANALYSIS_MODE_CHOICE="peak_gene" ;;
-        peak_peak|peak_pk|peak-peak|cis_peak_peak|6)
-            PAIR_MODE="default"; MODE_CODE="6"; ANALYSIS_MODE_CHOICE="peak_peak" ;;
-        all_gene_rna|rna_all_gene|a0|7)
-            PAIR_MODE="all_pair"; MODE_CODE="0"; ANALYSIS_MODE_CHOICE="7" ;;
-        all_gene|all_gene_plus|gene_all_gene|a1|8)
-            PAIR_MODE="all_pair"; MODE_CODE="1"; ANALYSIS_MODE_CHOICE="8" ;;
-        all_feature|all_features|feature_all_feature|a2|9)
-            PAIR_MODE="all_pair"; MODE_CODE="2"; ANALYSIS_MODE_CHOICE="9" ;;
-        *)
-            return 1 ;;
-    esac
-}
-
-analysis_mode_default_choice() {
-    if [ -n "${ANALYSIS_MODE_CHOICE:-}" ]; then
-        echo "$ANALYSIS_MODE_CHOICE"
-        return
-    fi
-    local pair="${PAIR_MODE:-$DEFAULT_PAIR_MODE}"
-    local mode="${MODE_CODE:-1}"
-    if [ "$pair" = "all_pair" ]; then
-        case "$mode" in
-            0) echo "7" ;;
-            1) echo "8" ;;
-            2) echo "9" ;;
-            *) echo "8" ;;
-        esac
-    else
-        case "$mode" in
-            0) echo "0" ;;
-            1) echo "1" ;;
-            2) echo "2" ;;
-            3) echo "3" ;;
-            4) echo "4" ;;
-            5) echo "5" ;;
-            6) echo "6" ;;
-            *) echo "1" ;;
-        esac
-    fi
-}
-
-analysis_mode_label() {
-    local pair="${PAIR_MODE:-$DEFAULT_PAIR_MODE}"
-    local mode="${MODE_CODE:-1}"
-    if [ "$pair" = "all_pair" ]; then
-        case "$mode" in
-            0) echo "7: RNA-only every gene -> every gene" ;;
-            1) echo "8: every gene -> every gene" ;;
-            2) echo "9: every gene/peak -> every gene/peak" ;;
-            *) echo "all_pair mode=$mode" ;;
-        esac
-    else
-        case "$mode" in
-            0) echo "0: RNA-only TF->gene" ;;
-            1) echo "1: TENET_Plus full (TF->gene, TF->peak, peak->gene)" ;;
-            2) echo "2: TF->gene" ;;
-            3) echo "3: TF->peak" ;;
-            4) echo "4: TF->gene + TF->peak" ;;
-            5) echo "5: peak->gene (cis)" ;;
-            6) echo "6: peak->peak (cis)" ;;
-            *) echo "default mode=$mode" ;;
-        esac
-    fi
-}
-
-prompt_analysis_mode() {
-    local default
-    default="$(analysis_mode_default_choice)"
-    while true; do
-        print_step "7" "Select Output Type" \
-            "Enter a number. Press Enter for [1]." \
-            "Default: [1] TENET_Plus full" \
-            "All modes:" \
-            "  [0] RNA-only TENET_TF" \
-            "  [1] TENET_Plus full: TF->gene, TF->peak, peak->gene" \
-            "  [2] TF->gene" \
-            "  [3] TF->peak" \
-            "  [4] TF->gene + TF->peak" \
-            "  [5] peak->gene (cis)" \
-            "  [6] peak->peak (cis)" \
-            "  [7] RNA-only every gene -> every gene" \
-            "  [8] every gene -> every gene" \
-            "  [9] every gene/peak -> every gene/peak"
-        local value
-        value=$(prompt_with_default "Network mode number" "$default")
-        if set_analysis_mode_from_choice "$value"; then
-            TENET_PAIR_MODE="$PAIR_MODE"
-            break
-        fi
-        echo "[!] Please enter a number: 0,1,2,3,4,5,6,7,8,9."
-        echo "    Backward-compatible aliases also work: a0/a1/a2 or names such as tf_gene/all_feature."
-        default="$value"
-    done
-}
-
-prompt_species() {
-    local default="${SPECIES:-}" 
-    while true; do
-        print_step "6" "Declare Species" \
-            "Used to resolve TF lists (e.g. human, mouse)"
-        local value=$(prompt_with_default "Species" "$default")
-        if [ -n "$value" ]; then
-            SPECIES="$value"
-            break
-        fi
-        echo "[!] Species is required."
-        default="$value"
-    done
-}
-
-update_defaults_after_mode() {
-    DEFAULT_PERMUTE="off"
-    DEFAULT_PERM_N="100"
-    DEFAULT_PERM_FDR="off"
-    DEFAULT_PERM_Q_ALPHA="0.05"
-    DEFAULT_PERM_ALPHA="0.01"
-    DEFAULT_PERM_SCOPE="grn_fdr"
-    DEFAULT_PERM_GRN_FDR="${TENET_PERM_CANDIDATE_GRN_FDR:-0.01}"
-    DEFAULT_PERM_GRN_TE_CUTOFF="${TENET_PERM_CANDIDATE_TE_CUTOFF:-0.0}"
-    DEFAULT_LOCAL_TE="off"
-    DEFAULT_LOCAL_EXPORT_WORKERS="${LOCAL_TE_EXPORT_WORKERS:-auto}"
-    DEFAULT_LOCAL_CHUNK_SIZE="$LOCAL_TE_CHUNK_SIZE"
-    DEFAULT_LOCAL_BUFFER="$LOCAL_TE_BUFFER_EDGES"
-    DEFAULT_LOCAL_READ_BATCH="$LOCAL_TE_READ_BATCH_ROWS"
-    DEFAULT_LOCAL_THREADS="$LOCAL_TE_USE_THREADS"
-    DEFAULT_LOCAL_DTYPE="$LOCAL_TE_VALUES_DTYPE"
-    DEFAULT_LOCAL_MERGE_WORKERS="${LOCAL_TE_MERGE_WORKERS:-auto}"
-    DEFAULT_LOCAL_SPLIT_EXPORT="${LOCAL_TE_SPLIT_EXPORT:-on}"
-    DEFAULT_LOCAL_SPLIT_DIR="${LOCAL_TE_SPLIT_OUTPUT_DIR:-local_te_split_chunks}"
-    DEFAULT_RESULTS_BUFFER_ROWS="${TENET_RESULTS_BUFFER_ROWS:-}"
-    DEFAULT_INTERMEDIATE_SAVE="${TENET_INTERMEDIATE_SAVE:-off}"
-    DEFAULT_BATCH_SIZE="${TE_BATCH_SIZE:-100}"
-    DEFAULT_PAIR_MODE="${TENET_PAIR_MODE:-default}"
-    DEFAULT_MAKE_GRN="${TENET_MAKE_GRN:-on}"
-    DEFAULT_GRN_FDR="${TENET_GRN_FDR:-0.01}"
-    DEFAULT_GRN_TE_CUTOFF="${TENET_GRN_TE_CUTOFF:-0.0}"
-    DEFAULT_TRIM_INDIRECT="${TENET_TRIM_INDIRECT:-on}"
-    DEFAULT_TRIM_THRESHOLD="${TENET_TRIM_THRESHOLD:--0.01}"
-    DEFAULT_GRN_THREADS="${TENET_GRN_THREADS:-$NUM_JOBS}"
-}
-
-set_permutation_off_defaults() {
-    PERMUTE_CHOICE="off"
-    PERM_N="$DEFAULT_PERM_N"
-    PERM_FDR="$DEFAULT_PERM_FDR"
-    PERM_Q_ALPHA="$DEFAULT_PERM_Q_ALPHA"
-    PERM_ALPHA="$DEFAULT_PERM_ALPHA"
-    PERM_SCOPE="$DEFAULT_PERM_SCOPE"
-    PERM_GRN_FDR="$DEFAULT_PERM_GRN_FDR"
-    PERM_GRN_TE_CUTOFF="$DEFAULT_PERM_GRN_TE_CUTOFF"
-    unset TENET_PERM_CANDIDATE_GRN_FDR
-    unset TENET_PERM_CANDIDATE_TE_CUTOFF
-}
-
-prompt_permutation_detail() {
-    local default_n="${PERM_N:-$DEFAULT_PERM_N}"
-    local default_grn_fdr="${PERM_GRN_FDR:-$DEFAULT_PERM_GRN_FDR}"
-    if [ "${PERMUTE_CHOICE,,}" != "on" ]; then
-        echo "[i] Permutation is off; no detail to edit."
-        return
-    fi
-    print_step "8" "Permutation Settings" \
-        "Only the necessary settings are shown." \
-        "Advanced p/q thresholds keep defaults: raw p <= ${DEFAULT_PERM_ALPHA}, q <= ${DEFAULT_PERM_Q_ALPHA} if FDR is enabled via CLI/env."
-    PERM_N=$(prompt_with_default "Permutation count" "$default_n")
-    PERM_FDR="$DEFAULT_PERM_FDR"
-    PERM_Q_ALPHA="$DEFAULT_PERM_Q_ALPHA"
-    PERM_ALPHA="$DEFAULT_PERM_ALPHA"
-    case "${PERM_SCOPE:-$DEFAULT_PERM_SCOPE}" in
-        grn_fdr)
-            PERM_GRN_FDR=$(prompt_with_default "Candidate GRN FDR alpha" "$default_grn_fdr")
-            PERM_GRN_TE_CUTOFF="$DEFAULT_PERM_GRN_TE_CUTOFF"
-            export TENET_PERM_CANDIDATE_GRN_FDR="$PERM_GRN_FDR"
-            export TENET_PERM_CANDIDATE_TE_CUTOFF="$PERM_GRN_TE_CUTOFF"
-            ;;
-        all)
-            unset TENET_PERM_CANDIDATE_GRN_FDR
-            unset TENET_PERM_CANDIDATE_TE_CUTOFF
-            ;;
-    esac
-}
-
-permutation_mode_label() {
-    if [ "${PERMUTE_CHOICE:-off}" != "on" ]; then
-        echo "off"
-        return
-    fi
-    case "${PERM_SCOPE:-$DEFAULT_PERM_SCOPE}" in
-        grn_fdr) echo "grn_edges" ;;
-        all) echo "all_pairs" ;;
-        *) echo "${PERM_SCOPE:-on}" ;;
-    esac
-}
-
-prompt_permutation_toggle() {
-    local default_mode
-    if [ "${PERMUTE_CHOICE:-$DEFAULT_PERMUTE}" = "on" ]; then
-        case "${PERM_SCOPE:-$DEFAULT_PERM_SCOPE}" in
-            all) default_mode="all_pairs" ;;
-            *) default_mode="grn_edges" ;;
-        esac
-    else
-        default_mode="off"
-    fi
-    print_step "8" "Permutation Mode" \
-        "off       = skip permutation testing" \
-        "grn_edges = after kernel TE, first make FDR-filtered GRN candidates, then permute those edges" \
-        "all_pairs = permute every selected TE pair (much slower)"
-    while true; do
-        local mode
-        mode=$(prompt_with_default "Permutation mode (off/grn_edges/all_pairs)" "$default_mode")
-        case "${mode,,}" in
-            off|no|none|0)
-                set_permutation_off_defaults
-                break
-                ;;
-            grn_edges|grn|grn_fdr|fdr|1|on|yes)
-                PERMUTE_CHOICE="on"
-                PERM_SCOPE="grn_fdr"
-                prompt_permutation_detail
-                break
-                ;;
-            all_pairs|all|full|2)
-                PERMUTE_CHOICE="on"
-                PERM_SCOPE="all"
-                prompt_permutation_detail
-                break
-                ;;
-            *)
-                echo "[!] Please enter off, grn_edges, or all_pairs."
-                default_mode="$mode"
-                ;;
-        esac
-    done
-}
-
-prompt_local_te_details() {
-    local default_chunk="${LOCAL_CHUNK_SIZE:-$DEFAULT_LOCAL_CHUNK_SIZE}"
-    local default_buffer="${LOCAL_BUFFER_EDGES:-$DEFAULT_LOCAL_BUFFER}"
-    local default_export="${LOCAL_EXPORT_WORKERS:-$DEFAULT_LOCAL_EXPORT_WORKERS}"
-    local default_merge="${LOCAL_MERGE_WORKERS:-$DEFAULT_LOCAL_MERGE_WORKERS}"
-    local default_read="${LOCAL_READ_BATCH:-$DEFAULT_LOCAL_READ_BATCH}"
-    local default_threads="${LOCAL_THREADS_FLAG:-$DEFAULT_LOCAL_THREADS}"
-    local default_dtype="${LOCAL_VALUES_DTYPE:-$DEFAULT_LOCAL_DTYPE}"
-    local default_split="${LOCAL_SPLIT_EXPORT:-$DEFAULT_LOCAL_SPLIT_EXPORT}"
-    local default_split_dir="${LOCAL_SPLIT_OUTPUT_DIR:-$DEFAULT_LOCAL_SPLIT_DIR}"
-    print_step "9" "Local TE Parameters" \
-        "Uses Step 2 jobs automatically for TE calculation and LocalTE export" \
-        "Only the output-shape settings are shown here" \
-        "Advanced worker knobs remain available through environment variables"
-    LOCAL_CHUNK_SIZE=$(prompt_with_default "Chunk size" "$default_chunk")
-    LOCAL_VALUES_DTYPE=$(prompt_with_default "Values dtype" "$default_dtype")
-    LOCAL_SPLIT_EXPORT=$(prompt_with_default "Split export by selectors? (on/off)" "$default_split")
-    LOCAL_SPLIT_OUTPUT_DIR=$(prompt_with_default "Split output directory" "$default_split_dir")
-    LOCAL_BUFFER_EDGES="$default_buffer"
-    LOCAL_EXPORT_WORKERS="$default_export"
-    LOCAL_MERGE_WORKERS="$default_merge"
-    LOCAL_READ_BATCH="$default_read"
-    LOCAL_THREADS_FLAG="$default_threads"
-    if is_on "$LOCAL_TE_ADVANCED"; then
-        echo ""
-        echo "Advanced LocalTE tuning (LOCAL_TE_ADVANCED=on)"
-        LOCAL_BUFFER_EDGES=$(prompt_with_default "Buffer edges" "$default_buffer")
-        LOCAL_EXPORT_WORKERS=$(prompt_with_default "Export workers (auto uses Step 2 jobs)" "$default_export")
-        LOCAL_MERGE_WORKERS=$(prompt_with_default "Merge workers (auto follows export workers)" "$default_merge")
-        LOCAL_READ_BATCH=$(prompt_with_default "Read batch rows" "$default_read")
-        LOCAL_THREADS_FLAG=$(prompt_with_default "Use threads (on/off)" "$default_threads")
-    fi
-}
-
-prompt_local_te_choice() {
-    local default="${STORE_LOCAL_TE_CHOICE:-$DEFAULT_LOCAL_TE}"
-    print_step "9" "Local TE Storage" \
-        "Toggle: $LOCAL_MENU" \
-        "on = store per-timepoint TE arrays (large output)"
-    STORE_LOCAL_TE_CHOICE=$(prompt_with_default "Store local TE?" "$default")
-    if [ "${STORE_LOCAL_TE_CHOICE,,}" = "on" ]; then
-        prompt_local_te_details
-    else
-        LOCAL_CHUNK_SIZE="$DEFAULT_LOCAL_CHUNK_SIZE"
-        LOCAL_BUFFER_EDGES="$DEFAULT_LOCAL_BUFFER"
-        LOCAL_EXPORT_WORKERS="$DEFAULT_LOCAL_EXPORT_WORKERS"
-        LOCAL_MERGE_WORKERS="$DEFAULT_LOCAL_MERGE_WORKERS"
-        LOCAL_READ_BATCH="$DEFAULT_LOCAL_READ_BATCH"
-        LOCAL_THREADS_FLAG="$DEFAULT_LOCAL_THREADS"
-        LOCAL_VALUES_DTYPE="$DEFAULT_LOCAL_DTYPE"
-    fi
-}
-
-prompt_grn_choice() {
-    local default="${MAKE_GRN_CHOICE:-$DEFAULT_MAKE_GRN}"
-    local default_fdr="${GRN_FDR:-$DEFAULT_GRN_FDR}"
-    local default_trim="${TRIM_INDIRECT_CHOICE:-$DEFAULT_TRIM_INDIRECT}"
-    local default_trim_threshold="${TRIM_THRESHOLD:-$DEFAULT_TRIM_THRESHOLD}"
-    case "${default_trim,,}" in
-        tf_gene|tf_gn|tf-gn|all|default|auto) default_trim="on" ;;
-    esac
-    print_step "10" "GRN / FDR Network" \
-        "on = after TE, create FDR-filtered .sif networks for the selected Step 7 outputs" \
-        "Indirect trimming is applied only to TF->gene; untrimmed FDR networks are always kept."
-    MAKE_GRN_CHOICE=$(prompt_with_default "Create FDR-filtered network? (on/off)" "$default")
-    if is_on "$MAKE_GRN_CHOICE"; then
-        GRN_FDR=$(prompt_with_default "Network FDR alpha" "$default_fdr")
-        TRIM_INDIRECT_CHOICE=$(prompt_with_default "Indirect trimming? (on/off)" "$default_trim")
-        case "${TRIM_INDIRECT_CHOICE,,}" in
-            tf_gene|tf_gn|tf-gn|all|default|auto) TRIM_INDIRECT_CHOICE="on" ;;
-        esac
-        if is_on "$TRIM_INDIRECT_CHOICE"; then
-            TRIM_THRESHOLD=$(prompt_with_default "Indirect trim cutoff" "$default_trim_threshold")
-        else
-            TRIM_THRESHOLD="$default_trim_threshold"
-        fi
-    else
-        GRN_FDR="$DEFAULT_GRN_FDR"
-        TRIM_INDIRECT_CHOICE="off"
-        TRIM_THRESHOLD="$DEFAULT_TRIM_THRESHOLD"
-    fi
-}
-
-prompt_results_buffer_rows() {
-    local default="${RESULTS_BUFFER_ROWS:-$DEFAULT_RESULTS_BUFFER_ROWS}"
-    local default_bs="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
-    local default_is="${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}"
-    print_step "11" "Runtime / Output" \
-        "Intermediate save: on/off controls whether TE writes incremental Parquet batches for resume/restart" \
-        "Rows to buffer before writing batch Parquet files (results_buffer_rows)" \
-        "Leave results_buffer_rows blank for auto (200000, or 5000 when storing LocalTE)" \
-        "Batch size controls how many sources per target are processed together"
-    INTERMEDIATE_SAVE_CHOICE=$(prompt_with_default "Intermediate save (on/off)" "$default_is")
-    RESULTS_BUFFER_ROWS=$(prompt_with_default "results_buffer_rows" "$default")
-    BATCH_SIZE=$(prompt_with_default "TE batch size" "$default_bs")
-}
-
-show_summary() {
-    echo ""
-    echo "--- Parameter Summary ---"
-    echo " 1) Input matrix         : $INPUT_FILE"
-    echo " 2) Parallel jobs        : $NUM_JOBS"
-    echo " 3) Trajectory file      : $TRAJECTORY_FILE"
-    echo " 4) Cell-select file     : $CELL_SELECT_FILE"
-    echo " 5) History length (k)   : $HISTORY_LENGTH"
-    echo " 6) Species              : $SPECIES"
-    echo " 7) Network mode         : $(analysis_mode_label)"
-    echo "    Kernel estimator     : exact grouped-state kernel"
-    if [ "${PERMUTE_CHOICE,,}" = "on" ]; then
-        if [[ "${PERM_SCOPE:-$DEFAULT_PERM_SCOPE}" = "grn_fdr" ]]; then
-            echo " 8) Permutation          : grn_edges, count=$PERM_N, candidate_GRN_FDR=${PERM_GRN_FDR:-$DEFAULT_PERM_GRN_FDR}"
-        else
-            echo " 8) Permutation          : all_pairs, count=$PERM_N"
-        fi
-    else
-        echo " 8) Permutation          : off"
-    fi
-    echo " 9) Local TE storage     : $STORE_LOCAL_TE_CHOICE"
-    if [ "${STORE_LOCAL_TE_CHOICE,,}" = "on" ]; then
-        echo "    Local TE export      : chunk=$LOCAL_CHUNK_SIZE, dtype=$LOCAL_VALUES_DTYPE, split=$LOCAL_SPLIT_EXPORT, split_dir=$LOCAL_SPLIT_OUTPUT_DIR"
-        echo "                           workers=auto from Step 2 jobs unless overridden"
-        if is_on "$LOCAL_TE_ADVANCED" || [ "${LOCAL_BUFFER_EDGES:-$DEFAULT_LOCAL_BUFFER}" != "$DEFAULT_LOCAL_BUFFER" ] || [ "${LOCAL_EXPORT_WORKERS:-$DEFAULT_LOCAL_EXPORT_WORKERS}" != "$DEFAULT_LOCAL_EXPORT_WORKERS" ] || [ "${LOCAL_MERGE_WORKERS:-$DEFAULT_LOCAL_MERGE_WORKERS}" != "$DEFAULT_LOCAL_MERGE_WORKERS" ] || [ "${LOCAL_READ_BATCH:-$DEFAULT_LOCAL_READ_BATCH}" != "$DEFAULT_LOCAL_READ_BATCH" ] || [ "${LOCAL_THREADS_FLAG:-$DEFAULT_LOCAL_THREADS}" != "$DEFAULT_LOCAL_THREADS" ]; then
-            echo "                           advanced: buffer=$LOCAL_BUFFER_EDGES, export=$LOCAL_EXPORT_WORKERS, merge=$LOCAL_MERGE_WORKERS, read=$LOCAL_READ_BATCH, threads=$LOCAL_THREADS_FLAG"
-        fi
-    fi
-    if is_on "${MAKE_GRN_CHOICE:-$DEFAULT_MAKE_GRN}"; then
-        echo "10) GRN / FDR network    : on, FDR=${GRN_FDR:-$DEFAULT_GRN_FDR}, trim=${TRIM_INDIRECT_CHOICE:-$DEFAULT_TRIM_INDIRECT}, trim_cutoff=${TRIM_THRESHOLD:-$DEFAULT_TRIM_THRESHOLD}"
-    else
-        echo "10) GRN / FDR network    : off"
-    fi
-    if [ -n "${RESULTS_BUFFER_ROWS:-}" ] || [ "${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}" != "$DEFAULT_INTERMEDIATE_SAVE" ] || [ "${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}" != "$DEFAULT_BATCH_SIZE" ]; then
-        echo "11) Runtime/output       : buffer=${RESULTS_BUFFER_ROWS:-auto}, intermediate=${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}, batch=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
-    else
-        echo "11) Runtime/output       : defaults"
-    fi
-    echo "---------------------------"
-}
+source "$CODE_DIR/runner/defaults.sh"
+source "$CODE_DIR/runner/interactive.sh"
+source "$CODE_DIR/runner/replay.sh"
 
 # Helper to mark pipeline stage (also echoed for visibility)
 set_stage() {
@@ -609,6 +52,135 @@ run_with_stage() {
   wait "$cmd_pid" || { kill "$writer_pid" >/dev/null 2>&1 || true; wait "$writer_pid" 2>/dev/null || true; return 1; }
   kill "$writer_pid" >/dev/null 2>&1 || true
   wait "$writer_pid" 2>/dev/null || true
+}
+
+link_or_copy_prepared_file() {
+  local src="$1"
+  local dst="$2"
+  if [[ ! -f "$src" ]]; then
+    echo "[Prepared] Missing required prepared file: $src" >&2
+    return 1
+  fi
+  if [[ "$src" -ef "$dst" ]]; then
+    return 0
+  fi
+  rm -f "$dst"
+  if [[ "${TENET_PREPARED_LINK_MODE,,}" == "copy" ]]; then
+    cp -f "$src" "$dst"
+  else
+    ln -s "$(abs_path "$src")" "$dst"
+  fi
+}
+
+validate_prepared_manifest() {
+  local prepared_dir="$1"
+  local manifest="$prepared_dir/prepared_input_manifest.json"
+  local reuse_mode="${TENET_REUSE_PREPARED,,}"
+  if [[ "$reuse_mode" == "force" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$manifest" ]]; then
+    echo "[Prepared] No prepared_input_manifest.json found. Use TENET_REUSE_PREPARED=force to trust this directory." >&2
+    return 1
+  fi
+  "$PYTHON" - "$manifest" "$RUN_INPUT_FILE" "$RUN_TRAJECTORY_FILE" "$RUN_CELL_SELECT_FILE" "$HISTORY_LENGTH" "$RUN_SPECIES" "$RUN_NETWORK_MODE" "${TENET_PAIR_MODE:-default}" <<'PY'
+import json, os, sys
+manifest_path, input_matrix, trajectory_file, cell_select_file, history, species, mode, pair_mode = sys.argv[1:]
+manifest = json.load(open(manifest_path, encoding="utf-8"))
+expected = {
+    "input_matrix": os.path.abspath(os.path.expanduser(input_matrix)),
+    "trajectory_file": os.path.abspath(os.path.expanduser(trajectory_file)),
+    "cell_select_file": os.path.abspath(os.path.expanduser(cell_select_file)),
+    "history_length": history,
+    "species": species,
+    "network_mode": mode,
+    "pair_mode": pair_mode,
+}
+errors = []
+for key, expected_value in expected.items():
+    observed = str(manifest.get(key, ""))
+    if observed != str(expected_value):
+        errors.append(f"{key}: expected {expected_value!r}, observed {observed!r}")
+if errors:
+    print("[Prepared] Manifest mismatch:")
+    for item in errors:
+        print("  - " + item)
+    sys.exit(1)
+PY
+}
+
+try_reuse_prepared_inputs() {
+  PREPARED_REUSED=off
+  local reuse_mode="${TENET_REUSE_PREPARED,,}"
+  if [[ "$reuse_mode" == "off" || "$reuse_mode" == "0" || "$reuse_mode" == "no" || -z "$reuse_mode" ]]; then
+    return 1
+  fi
+  if [[ -z "${TENET_PREPARED_DIR:-}" ]]; then
+    echo "[Prepared] TENET_REUSE_PREPARED=${TENET_REUSE_PREPARED}, but TENET_PREPARED_DIR is empty." >&2
+    return 1
+  fi
+  local prepared_dir
+  if [[ "$TENET_PREPARED_DIR" == /* ]]; then
+    prepared_dir="$(abs_path "$TENET_PREPARED_DIR")"
+  else
+    prepared_dir="$(abs_path "$REPO_ROOT/$TENET_PREPARED_DIR")"
+  fi
+  if [[ ! -d "$prepared_dir" ]]; then
+    echo "[Prepared] Prepared directory does not exist: $prepared_dir" >&2
+    return 1
+  fi
+  validate_prepared_manifest "$prepared_dir" || return 1
+  if [[ ! -f "$prepared_dir/feature_manifest.json" ]]; then
+    echo "[Prepared] Missing reference-aware feature manifest; regenerate prepared inputs." >&2
+    return 1
+  fi
+  link_or_copy_prepared_file "$prepared_dir/feature_manifest.json" "feature_manifest.json" || return 1
+
+  set_stage "PREPARED_REUSE"
+  echo "[Prepared] Reusing prepared inputs from: $prepared_dir"
+  echo "[Prepared] Link mode: ${TENET_PREPARED_LINK_MODE}"
+
+  link_or_copy_prepared_file "$prepared_dir/cell_gene_trsps.parquet" "cell_gene_trsps.parquet" || return 1
+  link_or_copy_prepared_file "$prepared_dir/gene_names" "gene_names" || return 1
+  link_or_copy_prepared_file "$prepared_dir/TE_peak_list.txt" "TE_peak_list.txt" || return 1
+  if [[ "${TENET_PAIR_MODE:-default}" == "default" ]]; then
+    link_or_copy_prepared_file "$prepared_dir/all_pairs.csv" "all_pairs.csv" || return 1
+  fi
+  if [[ -f "$prepared_dir/time_index_map.parquet" ]]; then
+    link_or_copy_prepared_file "$prepared_dir/time_index_map.parquet" "time_index_map.parquet" || true
+  fi
+  matrix="cell_gene_trsps.parquet"
+  trajectory="$RUN_TRAJECTORY_FILE"
+  cell_select="$RUN_CELL_SELECT_FILE"
+  PREPARED_REUSED=on
+  echo "[Prepared] Reuse ready: matrix processing, transpose, and pair generation will be skipped."
+  return 0
+}
+
+write_prepared_manifest() {
+  "$PYTHON" - "$RUN_INPUT_FILE" "$RUN_TRAJECTORY_FILE" "$RUN_CELL_SELECT_FILE" "$HISTORY_LENGTH" "$RUN_SPECIES" "$RUN_NETWORK_MODE" "${TENET_PAIR_MODE:-default}" <<'PY'
+import json, os, time, sys
+input_matrix, trajectory_file, cell_select_file, history, species, mode, pair_mode = sys.argv[1:]
+payload = {
+    "format": "tenet_prepared_input_manifest_v1",
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    "input_matrix": os.path.abspath(os.path.expanduser(input_matrix)),
+    "trajectory_file": os.path.abspath(os.path.expanduser(trajectory_file)),
+    "cell_select_file": os.path.abspath(os.path.expanduser(cell_select_file)),
+    "history_length": history,
+    "species": species,
+    "network_mode": mode,
+    "pair_mode": pair_mode,
+    "prepared_files": {
+        "cell_gene_trsps": os.path.abspath("cell_gene_trsps.parquet") if os.path.exists("cell_gene_trsps.parquet") else None,
+        "gene_names": os.path.abspath("gene_names") if os.path.exists("gene_names") else None,
+        "te_peak_list": os.path.abspath("TE_peak_list.txt") if os.path.exists("TE_peak_list.txt") else None,
+        "all_pairs": os.path.abspath("all_pairs.csv") if os.path.exists("all_pairs.csv") else None,
+    },
+}
+with open("prepared_input_manifest.json", "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2)
+PY
 }
 
 is_on() {
@@ -705,140 +277,31 @@ build_grn_networks() {
     echo "[GRN] Output manifest: grn_network_outputs.tsv"
 }
 
-build_replay_command() {
-    local cmd=""
-    local var val default
-
-    append_env_if_nondefault() {
-        var="$1"
-        default="$2"
-        val="${!var-}"
-        if [[ -n "${val:-}" && "$val" != "$default" ]]; then
-            cmd+="${var}=$(printf '%q' "$val") "
-        fi
-    }
-
-    append_env_if_set() {
-        var="$1"
-        val="${!var-}"
-        if [[ -n "${val:-}" ]]; then
-            cmd+="${var}=$(printf '%q' "$val") "
-        fi
-    }
-
-    local mode="${MODE_CODE:-${7:-1}}"
-    local replay_mode="$mode"
-    case "${PAIR_MODE:-}" in
-        all_pair)
-            case "$mode" in
-                0) replay_mode="7" ;;
-                1) replay_mode="8" ;;
-                2) replay_mode="9" ;;
-            esac
-            ;;
-        *)
-            case "${TENET_PAIR_MODE:-default}:$mode" in
-                gene_only:0) replay_mode="7" ;;
-                gene_only:1) replay_mode="8" ;;
-                all_feature:2) replay_mode="9" ;;
-            esac
-            ;;
-    esac
-
-    append_env_if_nondefault PYTHON "python3"
-    append_env_if_nondefault MONITOR_GPU "off"
-    append_env_if_nondefault TENET_OUTPUT_DIR "$REPO_ROOT/output"
-    append_env_if_nondefault TENET_INTERMEDIATE_SAVE "off"
-    append_env_if_nondefault TE_BATCH_SIZE "100"
-    append_env_if_nondefault TENET_PAIR_MODE "default"
-    append_env_if_nondefault TENET_PERMUTE "off"
-    append_env_if_nondefault TENET_PERM_N "100"
-    append_env_if_nondefault TENET_PERM_FDR "off"
-    append_env_if_nondefault TENET_PERM_Q_ALPHA "0.05"
-    append_env_if_nondefault TENET_PERM_ALPHA "0.01"
-    append_env_if_nondefault TENET_STORE_LOCAL_TE "off"
-    append_env_if_set TENET_RESULTS_BUFFER_ROWS
-    append_env_if_nondefault TENET_MAKE_GRN "on"
-    append_env_if_nondefault TENET_GRN_FDR "0.01"
-    append_env_if_nondefault TENET_GRN_TE_CUTOFF "0.0"
-    append_env_if_nondefault TENET_TRIM_INDIRECT "on"
-    append_env_if_nondefault TENET_TRIM_THRESHOLD "-0.01"
-    if [[ -n "${TENET_GRN_THREADS:-}" && "${TENET_GRN_THREADS}" != "${2:-}" ]]; then
-        cmd+="TENET_GRN_THREADS=$(printf '%q' "$TENET_GRN_THREADS") "
-    fi
-    if [[ -n "${TENET_PERM_CANDIDATE_GRN_FDR:-}" ]]; then
-        append_env_if_set TENET_PERM_CANDIDATE_GRN_FDR
-    fi
-    append_env_if_set TENET_PERM_CANDIDATE_TE_CUTOFF
-
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE "on"
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE_CODED "on"
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE_FACTORIZED "auto"
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE_SOURCE_PREFIX "auto"
-    append_env_if_nondefault TE_KERNEL_SOURCE_CODE_INTEGER "auto"
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE_SPARSE "off"
-    append_env_if_nondefault TE_KERNEL_GROUPED_STATE_2D_RANGE "on"
-    append_env_if_nondefault TE_KERNEL_PERM_TABLE_SAMPLER "off"
-    append_env_if_nondefault TE_KERNEL_PERM_TABLE_MAX_CELLS ""
-    append_env_if_nondefault TE_PERM_KERNEL_GROUPED_SOURCES_PER_CHUNK "2"
-    append_env_if_nondefault TE_PERM_SORT_WORK "on"
-
-    local store_local="${TENET_STORE_LOCAL_TE:-off}"
-    if [[ "${store_local,,}" == "on" || "$store_local" == "1" ]]; then
-        append_env_if_nondefault LOCAL_TE_CHUNK_SIZE "300"
-        append_env_if_nondefault LOCAL_TE_BUFFER_EDGES "10000"
-        append_env_if_nondefault LOCAL_TE_EXPORT_WORKERS "auto"
-        append_env_if_nondefault LOCAL_TE_MERGE_WORKERS ""
-        append_env_if_nondefault LOCAL_TE_READ_BATCH_ROWS "8192"
-        append_env_if_nondefault LOCAL_TE_USE_THREADS "on"
-        append_env_if_nondefault LOCAL_TE_VALUES_DTYPE "float16"
-        append_env_if_nondefault LOCAL_TE_SPLIT_EXPORT "on"
-        append_env_if_nondefault LOCAL_TE_SPLIT_OUTPUT_DIR "local_te_split_chunks"
-        append_env_if_nondefault LOCAL_TE_ADVANCED "off"
-    fi
-
-    cmd+="$(printf '%q' "$0")"
-    local replay_args=("${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "$replay_mode")
-    local arg
-    for arg in "${replay_args[@]}"; do
-        cmd+=" $(printf '%q' "$arg")"
-    done
-    printf '%s\n' "$cmd"
-}
-
-write_replay_logs() {
-    local cmd
-    cmd=$(build_replay_command "$@")
-    local txt="$OUTPUT_DIR/run_invocation.txt"
-    local sh="$OUTPUT_DIR/run_invocation.sh"
-    {
-        echo "# Invocation (copy-paste to re-run):"
-        echo "$cmd"
-    } > "$txt"
-    {
-        echo "#!/usr/bin/env bash"
-        echo "# Auto-generated by TENET_Plus_for_py.sh on $(date '+%Y-%m-%d %H:%M:%S')"
-        echo ""
-        echo "$cmd"
-    } > "$sh"
-    chmod +x "$sh" 2>/dev/null || true
-    echo "[Run] Replay files saved:"
-    echo "  $txt"
-    echo "  $sh"
-    echo "[Run] Replay command:"
-    echo "  $cmd"
-}
-
 # Function to display usage
 usage() {
     cat <<USAGE
 Usage:
   $0
+  $0 --write-config analysis.ini
+  $0 --check-config analysis.ini
+  $0 --config analysis.ini [--output NEW_DIRECTORY]
   $0 <input_file> <num_jobs> <trajectory_file> <cell_select_file> <history_k> <species> <network_mode>
 
-The non-interactive form intentionally keeps only the seven core arguments.
-Use environment variables for optional toggles such as permutation, LocalTE,
-GRN/FDR export, output isolation, and buffering.
+Use --config for a non-interactive run with named settings in an INI file.
+Every run saves run_config.ini and run_invocation.sh in its output directory.
+Config paths are relative to the config file; --output is relative to the current
+directory. The seven-argument interface and environment settings remain supported.
+
+Species resources:
+  Presets: human, mouse, zebrafish, fly, worm, rat.
+  TENET_REFERENCE=/path/to/bundle overrides the species reference.
+  The verified bundled human reference defaults to human_legacy cis mapping.
+  Other references default to legacy (skip unmapped RNA; last row for multi-contig RNA).
+  TENET_CIS_MAPPING_POLICY=strict requires unique RNA contigs for cis modes.
+  TENET_TF_LIST=/path/to/TFs.txt supplies matrix-matching TF IDs (modes 0-4).
+  Only human/mouse TF lists are bundled. Modes 5/6 and all-pair modes need no TF list.
+  Run python -m code.species_support --species SPECIES --mode MODE --matrix MATRIX
+  before a large run. See README.md and docs/OTHER_SPECIES.md.
 
   <network_mode>:
     Default: 1 = TENET_Plus full
@@ -883,16 +346,29 @@ Environment:
   TENET_PERM_CANDIDATE_TE_CUTOFF:
                         optional TE cutoff for GRN-FDR permutation candidates.
   TENET_STORE_LOCAL_TE: on | off (default: off).
+  LOCAL_TE_VIRTUAL   : on | off (default: off). When LocalTE is on, store
+                       exact compact state tables for all edge x timepoint
+                       values instead of materializing dense LocalTE vectors.
   TENET_RESULTS_BUFFER_ROWS:
                         rows to buffer in TE before flushing batch parquet
                         files (default auto: 200000, or 5000 with LocalTE).
+  TENET_REUSE_PREPARED:
+                        off | on | force (default: off). Reuse a prepared
+                        output directory and skip CSV filtering/transpose/pair
+                        generation. 'on' requires prepared_input_manifest.json
+                        to match current inputs; 'force' still requires valid feature/reference metadata.
+  TENET_PREPARED_DIR  : output directory containing cell_gene_trsps.parquet,
+                        gene_names, TE_peak_list.txt, and all_pairs.csv.
+  TENET_PREPARED_LINK_MODE:
+                        symlink | copy (default: symlink).
   LOCAL_TE_*          : LocalTE export tuning; most users can leave these unset.
 USAGE
-    exit 0
+    return 0
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
+    exit 0
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -924,13 +400,14 @@ if [ $# -eq 0 ]; then
     prompt_permutation_toggle
     prompt_local_te_choice
     prompt_grn_choice
+    prompt_output_directory
     INTERMEDIATE_SAVE_CHOICE="${INTERMEDIATE_SAVE_CHOICE:-$DEFAULT_INTERMEDIATE_SAVE}"
     RESULTS_BUFFER_ROWS="${RESULTS_BUFFER_ROWS:-$DEFAULT_RESULTS_BUFFER_ROWS}"
     BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
 
     while true; do
         show_summary
-        read -rp "Edit step (1-11) or press Enter to continue: " EDIT_CHOICE
+        read -rp "Edit step (1-12) or press Enter to continue: " EDIT_CHOICE
         EDIT_CHOICE=$(trim_whitespace "$EDIT_CHOICE")
         case "$EDIT_CHOICE" in
             "")
@@ -970,6 +447,9 @@ if [ $# -eq 0 ]; then
             11)
                 prompt_results_buffer_rows
                 ;;
+            12)
+                prompt_output_directory
+                ;;
             *)
                 echo "[!] Unknown step selection."
                 ;;
@@ -996,6 +476,8 @@ if [ $# -eq 0 ]; then
     else
         unset TENET_RESULTS_BUFFER_ROWS
     fi
+
+    mkdir -p "$OUTPUT_DIR"
 
     # After final confirmation, print summary once more and snapshot invocation
     show_summary "$@"
@@ -1041,11 +523,13 @@ fi
 if [ $# -lt 7 ]; then
     echo "Insufficient arguments supplied."
     usage
+    exit 2
 fi
 if [ $# -gt 7 ]; then
     echo "Too many positional arguments supplied."
     echo "Use the seven core arguments plus TENET_* / LOCAL_TE_* environment variables for optional settings."
     usage
+    exit 2
 fi
 
 ARG1_TRIM=$(trim_whitespace "$1")
@@ -1056,6 +540,11 @@ ABS_INPUT=$(abs_path "$ARG1_TRIM")
 ABS_TRAJECTORY=$(abs_path "$ARG3_TRIM")
 ABS_CELL_SELECT=$(abs_path "$ARG4_TRIM")
 set -- "$ABS_INPUT" "$ARG2_TRIM" "$ABS_TRAJECTORY" "$ABS_CELL_SELECT" "${@:5}"
+RUN_INPUT_FILE="$1"
+RUN_TRAJECTORY_FILE="$3"
+RUN_CELL_SELECT_FILE="$4"
+RUN_SPECIES="$6"
+RUN_NETWORK_MODE="$7"
 # Default HISTORY_LENGTH from 5th argument when not set via interactive mode
 HISTORY_LENGTH="${HISTORY_LENGTH:-$5}"
 
@@ -1136,6 +625,7 @@ if [ -n "$REQUESTED_PAIR_MODE" ]; then
 elif [ -z "${TENET_PAIR_MODE:-}" ]; then
   TENET_PAIR_MODE="default"
 fi
+export TENET_PAIR_MODE
 
 INPUT_FILE="$1"
 NUM_JOBS="$2"
@@ -1199,19 +689,41 @@ TENET_TRIM_INDIRECT="${TRIM_INDIRECT_CHOICE:-${TENET_TRIM_INDIRECT:-$DEFAULT_TRI
 TENET_TRIM_THRESHOLD="${TRIM_THRESHOLD:-${TENET_TRIM_THRESHOLD:-$DEFAULT_TRIM_THRESHOLD}}"
 TENET_GRN_THREADS="${TENET_GRN_THREADS:-$2}"
 
+export TENET_OUTPUT_DIR="$OUTPUT_DIR"
+# The Python payload writer must receive the dtype selected in the prompt too.
+export LOCAL_TE_VALUES_DTYPE
 show_summary "$@"
 write_replay_logs "$@"
+
+# Fail before matrix conversion, monitoring or TE if species resources are absent.
+if [[ -n "${TENET_TF_LIST:-}" ]]; then
+  export TENET_TF_LIST="$(abs_path "$TENET_TF_LIST")"
+fi
+"$PYTHON" -m code.species_support --species "$6" --mode "$7" \
+  --matrix "$1" --output "$OUTPUT_DIR/species_preflight.json"
 
 chmod +x "$CODE_DIR/memory_check.sh" || true
 CURRENT_STAGE_FILE="$OUTPUT_DIR/current_stage.txt"
 echo "INIT" > "$CURRENT_STAGE_FILE"
 export TENET_STAGE_FILE="$CURRENT_STAGE_FILE"
-# GPU monitor toggle (env override: MONITOR_GPU=on|off); default off for lower overhead
-MONITOR_GPU="${MONITOR_GPU:-off}"
-"$CODE_DIR/memory_check.sh" $$ "$CURRENT_STAGE_FILE" "$MONITOR_GPU" &
+"$CODE_DIR/memory_check.sh" $$ "$CURRENT_STAGE_FILE" &
 MONITOR_PID=$!
-echo "[Run] Memory monitor started: pid=${MONITOR_PID}, gpu=${MONITOR_GPU}"
+cleanup_memory_monitor() {
+    local exit_status=$?
+    trap - EXIT
+    kill "$MONITOR_PID" 2>/dev/null || true
+    wait "$MONITOR_PID" 2>/dev/null || true
+    exit "$exit_status"
+}
+trap cleanup_memory_monitor EXIT
+echo "[Run] RAM monitor started: pid=${MONITOR_PID}"
 
+if [[ -n "${TENET_REFERENCE:-}" && -d "$TENET_REFERENCE" ]]; then
+  export TENET_REFERENCE="$(abs_path "$TENET_REFERENCE")"
+fi
+if [[ -n "${TENET_FEATURE_TYPES:-}" ]]; then
+  export TENET_FEATURE_TYPES="$(abs_path "$TENET_FEATURE_TYPES")"
+fi
 cd "$OUTPUT_DIR"
 
 INPUT_FILE="$1"
@@ -1232,18 +744,27 @@ convert_parquet_to_csv() {
     fi
 
     echo "Extracting header from Parquet file to CSV..."
-    "$PYTHON" - <<END
+    "$PYTHON" - "$INPUT_FILE" "$TEMP_CSV" <<'END'
 import pandas as pd
 import sys
 
 try:
-    df = pd.read_parquet("$INPUT_FILE", columns=None)
-    df.head(0).to_csv("$TEMP_CSV", index=False)
+    df = pd.read_parquet(sys.argv[1], columns=None)
+    df.head(0).to_csv(sys.argv[2], index=False)
 except Exception as e:
     print(f"Error converting Parquet to CSV: {e}")
     sys.exit(1)
 END
 }
+
+PREPARED_REUSED=off
+if ! try_reuse_prepared_inputs; then
+  case "${TENET_REUSE_PREPARED,,}" in
+    on|1|yes|true|force)
+      echo "Error: prepared input reuse was requested but could not be activated. Exiting instead of falling back to slow preprocessing." >&2
+      exit 1
+      ;;
+  esac
 
 # Determine file type based on extension
 FILE_EXT="${INPUT_FILE##*.}"
@@ -1271,53 +792,8 @@ if ! [[ "$ARG7" =~ ^[0-6]$ ]]; then
     exit 1
 fi
 
-# Process the first line of the data file
-FIRST_LINE=$(head -n 1 "$DATA_FILE" | sed 's/\r//g' | sed 's/,/\n/g')
-
-if [ "$ARG7" -eq 0 ]; then
-    RESULT=$(echo "$FIRST_LINE" | grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" || true)
-    if [ -n "$RESULT" ]; then
-        echo "--- Chromosome information was found from the matrix in TENET_TF setting. Please check the input matrix or adjust setting($ARG7). ---"
-        [ "$FILE_EXT" == "parquet" ] && rm -f "$TEMP_CSV"
-        exit 1
-    fi
-else
-    RESULT=$(echo "$FIRST_LINE" | grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" || true)
-    if [ -z "$RESULT" ]; then
-        echo "--- Chromosome information was not found from the matrix in TENET Plus setting. Please check the input matrix or adjust setting($ARG7). ---"
-        [ "$FILE_EXT" == "parquet" ] && rm -f "$TEMP_CSV"
-        exit 1
-    fi
-fi
-
-if [ "$ARG7" -ne 0 ]; then
-    echo "=== TENET+ Kernel Run ==="
-    echo "[Setup] Extracting peak names from matrix header."
-    # If INPUT_FILE is Parquet, extract header columns; otherwise, use the original file
-    if [[ "$FILE_EXT" == "parquet" ]]; then
-        if ! "$PYTHON" - <<END > TE_peak_list.txt
-import pandas as pd
-import sys
-import re
-try:
-    df = pd.read_parquet("$INPUT_FILE", columns=None)
-    pattern = re.compile(r"^chr[0-9XY]+-([0-9]+)-([0-9]+)$")
-    filtered_columns = [col for col in df.columns if pattern.match(str(col))]
-    print("\n".join(filtered_columns))
-except Exception as e:
-    print(f"Error reading Parquet file: {e}")
-    sys.exit(1)
-END
-        then
-            echo "Error generating TE_peak_list.txt from Parquet file."
-            exit 1
-        fi
-    else
-        head -n 1 "$INPUT_FILE" | sed 's/\r//g' | sed 's/,/\n/g' | grep -P "^chr[0-9XY]+-([0-9]+)-([0-9]+)$" > TE_peak_list.txt
-    fi
-else
-    echo "=== TENET Kernel Run: RNA-only TF mode ==="
-fi
+# Classify features using the shared candidate parser.
+"$PYTHON" -m code.feature_utils "$INPUT_FILE" "$ARG7" "$6"
 
 # Clean up temporary CSV file if it was created
 if [ "$FILE_EXT" == "parquet" ]; then
@@ -1332,19 +808,10 @@ if grep -qv '^1$' "$4" || ! sort -gc "$3" || ! file "$1" | grep -q 'parquet'; th
         echo "Error in process_matrix.py. Exiting."
         exit 1
     fi
-    # Move filtered artifacts into input directory and reference them there
-    if [ -f filtered_matrix.parquet ]; then
-      mv -f filtered_matrix.parquet "$INPUT_DIR/filtered_matrix.parquet"
-    fi
-    if [ -f filtered_trajectory.txt ]; then
-      mv -f filtered_trajectory.txt "$INPUT_DIR/filtered_trajectory.txt"
-    fi
-    if [ -f filtered_cellselect.txt ]; then
-      mv -f filtered_cellselect.txt "$INPUT_DIR/filtered_cellselect.txt"
-    fi
-    matrix="$INPUT_DIR/filtered_matrix.parquet"     # New matrix file
-    trajectory="$INPUT_DIR/filtered_trajectory.txt" # New trajectory file
-    cell_select="$INPUT_DIR/filtered_cellselect.txt"    # New cell select file
+    # Keep generated inputs isolated within this run's output directory.
+    matrix="$OUTPUT_DIR/filtered_matrix.parquet"
+    trajectory="$OUTPUT_DIR/filtered_trajectory.txt"
+    cell_select="$OUTPUT_DIR/filtered_cellselect.txt"
 else
     set_stage "MATRIX_PROCESSING_SKIP"
     echo "[Matrix] Input already appears selected/sorted; using it as-is."
@@ -1356,11 +823,11 @@ fi
 # Always regenerate gene_names from the current matrix
 set_stage "GENE_NAMES_REGEN"
 echo "[Setup] Writing gene_names from matrix header."
-if ! "$PYTHON" - <<PY
+if ! "$PYTHON" - "$matrix" "$OUTPUT_DIR/gene_names" <<'PY'
 import sys
 import pandas as pd
 import pathlib
-path = pathlib.Path("${matrix}")
+path = pathlib.Path(sys.argv[1])
 ext = path.suffix.lower()
 try:
     if ext == '.parquet':
@@ -1373,8 +840,7 @@ try:
         # fallback try csv
         df = pd.read_csv(path, index_col=0)
     cols = list(map(str, df.columns.tolist()))
-    # Write gene_names into both input and output directories
-    for dst in [r'${INPUT_DIR}/gene_names', r'${OUTPUT_DIR}/gene_names']:
+    for dst in [sys.argv[2]]:
         with open(dst, 'w') as f:
             for c in cols:
                 f.write(f"{c}\n")
@@ -1393,13 +859,15 @@ if [ -f cell_gene_trsps.parquet ]; then
   rm -f cell_gene_trsps.parquet
 fi
 
+"$PYTHON" -m code.feature_utils "${matrix}" "$ARG7" "$6"
+
 set_stage "PREPARED_MATRIX"
 echo "[Setup] Prepared matrix accepted."
 
 if [ "$7" -ne 0 ]; then
   echo "[Pairs] Building selected source-target pairs for mode ${7}."
     if [ "${TENET_PAIR_MODE:-default}" = "default" ]; then
-      if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_PLUS" "$PYTHON" -m code.PreProcessScript_TE_Plus $6 $7 "${matrix}"; then
+      if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_PLUS" "$PYTHON" -m code.PreProcessScript_TE_Plus "$6" "$7" "${matrix}"; then
           echo "Error in PreProcessScript_TE_Plus.py. Exiting."
           exit 1
       fi
@@ -1409,7 +877,7 @@ if [ "$7" -ne 0 ]; then
 else
   echo "[Pairs] Building RNA-only TF source-target pairs."
   if [ "${TENET_PAIR_MODE:-default}" = "default" ]; then
-    if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_TF" "$PYTHON" -m code.PreProcessScript_TENET_TF $6; then
+    if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "PREPROCESS_TENET_TF" "$PYTHON" -m code.PreProcessScript_TENET_TF "$6"; then
         echo "Error in PreProcessScript_TENET_TF.py. Exiting."
         exit 1
     fi
@@ -1421,10 +889,10 @@ fi
 # Ensure transposed matrix exists for TE calculation.
 if [ ! -f cell_gene_trsps.parquet ]; then
   echo "--- Generating cell_gene_trsps.parquet by transposing matrix ---"
-  if ! "$PYTHON" - <<PY
+  if ! "$PYTHON" - "$matrix" <<'PY'
 import sys, pathlib
 import pandas as pd
-path = pathlib.Path("${matrix}")
+path = pathlib.Path(sys.argv[1])
 ext = path.suffix.lower()
 try:
     if ext == '.parquet':
@@ -1444,6 +912,18 @@ PY
     echo "Error creating cell_gene_trsps.parquet by transpose. Exiting."
     exit 1
   fi
+fi
+
+fi
+
+# Validate copied manifests before any TE calculation (including reuse).
+"$PYTHON" -m code.feature_utils --validate-prepared "$ARG7" "$6"
+
+# A valid feature manifest may still yield no edges in a selected network mode.
+if [[ "${TENET_PAIR_MODE:-default}" == "default" && ! -s all_pairs.csv ]]; then
+  echo "Error: No candidate pairs for network mode ${ARG7}; TE calculation was not started." >&2
+  echo "Check the selected features, TF identifiers, and cis mappings. Mode 6 needs at least two peaks on the same contig." >&2
+  exit 2
 fi
 
 # If requested, automatically select history length k based on series length
@@ -1545,6 +1025,8 @@ PY
   echo "--- Auto-selected history length k=$HISTORY_LENGTH ---"
 fi
 
+write_prepared_manifest
+
 # TE computation
 echo "[TE] Kernel estimator: exact grouped-state fast path enabled."
 
@@ -1555,10 +1037,27 @@ PERM_FDR="${TENET_PERM_FDR:-off}"
 PERM_Q_ALPHA="${TENET_PERM_Q_ALPHA:-0.05}"
 PERM_ALPHA="${TENET_PERM_ALPHA:-0.01}"
 STORE_LOCAL_TE="${TENET_STORE_LOCAL_TE:-off}"
+LOCAL_TE_LAZY_ON=off
+if [[ "${LOCAL_TE_LAZY,,}" == "on" || "${LOCAL_TE_LAZY,,}" == "1" || "${LOCAL_TE_LAZY,,}" == "yes" ]]; then
+  LOCAL_TE_LAZY_ON=on
+fi
+LOCAL_TE_VIRTUAL_ON=off
+if [[ "${LOCAL_TE_VIRTUAL,,}" == "on" || "${LOCAL_TE_VIRTUAL,,}" == "1" || "${LOCAL_TE_VIRTUAL,,}" == "yes" ]]; then
+  LOCAL_TE_VIRTUAL_ON=on
+fi
 LOCAL_ARGS=()
 if [[ "$STORE_LOCAL_TE" == "on" || "$STORE_LOCAL_TE" == "ON" || "$STORE_LOCAL_TE" == "1" ]]; then
-  LOCAL_ARGS=(--store_local_te --localte_codec "$LOCAL_TE_CODEC")
-  echo "[TE] LocalTE storage: ON (codec=${LOCAL_TE_CODEC}). This adds per-pair timepoint arrays and can be I/O/compression bound."
+  if [[ "$LOCAL_TE_VIRTUAL_ON" == "on" ]]; then
+    rm -f "${LOCAL_TE_VIRTUAL_OUTPUT_DIR}/direct_virtual_localte_done.json" 2>/dev/null || true
+    echo "[TE] LocalTE storage: VIRTUAL exact array. TE scores are kept separately; timepoint values are reconstructed from compact state tables."
+  elif [[ "$LOCAL_TE_LAZY_ON" == "on" ]]; then
+    echo "[TE] LocalTE storage: LAZY exact recipe. Full LocalTE arrays are not materialized during TE."
+  else
+    LOCAL_ARGS=(--store_local_te --localte_codec "$LOCAL_TE_CODEC")
+    rm -f "${LOCAL_TE_SPLIT_OUTPUT_DIR}/direct_localte_done.json" 2>/dev/null || true
+    rm -f "${LOCAL_TE_VIDEO_OUTPUT_DIR}/direct_localte_done.json" 2>/dev/null || true
+    echo "[TE] LocalTE storage: ON (codec=${LOCAL_TE_CODEC}). This adds per-pair timepoint arrays and can be I/O/compression bound."
+  fi
 else
   echo "[TE] LocalTE storage: OFF."
 fi
@@ -1631,6 +1130,8 @@ if [[ "$PERMUTE" == "on" || "$PERMUTE" == "ON" || "$PERMUTE" == "1" ]]; then
       --mode kernel \
       "${TE_BATCH_ARGS[@]}" \
       --pair_mode "$TENET_PAIR_MODE" \
+      --species "$6" \
+      --split_type "$7" \
       "${PERM_ARGS[@]}" \
       "${BUFFER_ARGS[@]}" \
       "${LOCAL_ARGS[@]}" \
@@ -1644,6 +1145,8 @@ else
       --mode kernel \
       "${TE_BATCH_ARGS[@]}" \
       --pair_mode "$TENET_PAIR_MODE" \
+      --species "$6" \
+      --split_type "$7" \
       "${BUFFER_ARGS[@]}" \
       "${LOCAL_ARGS[@]}" \
       "${TIME_ARGS[@]}"; then
@@ -1653,7 +1156,7 @@ else
 fi
 
 rm -f TE_TF_GN.parquet TE_TF_PK.parquet TE_PK_GN.parquet TE_PK_PK.parquet TE_GN_GN.parquet TE_all_features.parquet
-if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "MATRIX_GENERATE" "$PYTHON" -m code.Matrix_generate TE_result_all.parquet $6 $7; then
+if ! TENET_PAIR_MODE="$TENET_PAIR_MODE" run_with_stage "MATRIX_GENERATE" "$PYTHON" -m code.Matrix_generate TE_result_all.parquet "$6" "$7"; then
     echo "Error in Matrix_generate.py. Exiting."
     exit 1
 fi
@@ -1661,6 +1164,79 @@ fi
 build_grn_networks
 
 if [[ "$STORE_LOCAL_TE" == "on" || "$STORE_LOCAL_TE" == "ON" || "$STORE_LOCAL_TE" == "1" ]]; then
+    if [[ "$LOCAL_TE_VIRTUAL_ON" == "on" ]]; then
+        mkdir -p "$LOCAL_TE_RECIPE_DIR"
+        "$PYTHON" - "$LOCAL_TE_RECIPE_DIR" "$LOCAL_TE_VIRTUAL_OUTPUT_DIR" "$LOCAL_TE_CODE_INDEX_OUTPUT_DIR" "$HISTORY_LENGTH" "$SPECIES" "$7" "$TENET_PAIR_MODE" <<'PY'
+import json, os, time, sys
+recipe_path, virtual_path, code_index_path, history, species, mode, pair_mode = sys.argv[1:]
+recipe_dir = os.path.abspath(recipe_path)
+recipe = {
+    "format": "tenet_localte_lazy_recipe_v1",
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    "work_dir": os.getcwd(),
+    "matrix_parquet": os.path.abspath("cell_gene_trsps.parquet"),
+    "gene_names": os.path.abspath("gene_names"),
+    "time_index_map": os.path.abspath("time_index_map.parquet") if os.path.exists("time_index_map.parquet") else None,
+    "all_pairs": os.path.abspath("all_pairs.csv") if os.path.exists("all_pairs.csv") else None,
+    "te_result_all": os.path.abspath("TE_result_all.parquet"),
+    "virtual_array": os.path.abspath(virtual_path),
+    "code_index": os.path.abspath(code_index_path) if os.path.exists(os.path.join(code_index_path, "metadata.json")) else None,
+    "history_length": int(history),
+    "kernel_width": 0.5,
+    "species": species,
+    "network_mode": mode,
+    "pair_mode": pair_mode,
+    "note": "Exact LocalTE timepoint values are stored as compact virtual state tables. Use python -m code.localte_virtual_array export to materialize chunks.",
+}
+with open(os.path.join(recipe_dir, "recipe.json"), "w", encoding="utf-8") as fh:
+    json.dump(recipe, fh, indent=2)
+PY
+        echo "[LocalTE] Virtual recipe written: ${LOCAL_TE_RECIPE_DIR}/recipe.json"
+        if [[ -f "${LOCAL_TE_VIRTUAL_OUTPUT_DIR}/direct_virtual_localte_done.json" ]]; then
+            echo "[LocalTE] Virtual array ready: ${LOCAL_TE_VIRTUAL_OUTPUT_DIR}"
+        else
+            echo "Error: virtual LocalTE marker not found at ${LOCAL_TE_VIRTUAL_OUTPUT_DIR}/direct_virtual_localte_done.json"
+            exit 1
+        fi
+        set_stage "LOCALTE_VIRTUAL_READY"
+    elif [[ "$LOCAL_TE_LAZY_ON" == "on" ]]; then
+        mkdir -p "$LOCAL_TE_RECIPE_DIR"
+        "$PYTHON" - "$LOCAL_TE_RECIPE_DIR" "$LOCAL_TE_VIRTUAL_OUTPUT_DIR" "$LOCAL_TE_CODE_INDEX_OUTPUT_DIR" "$HISTORY_LENGTH" "$SPECIES" "$7" "$TENET_PAIR_MODE" <<'PY'
+import json, os, time, sys
+recipe_path, virtual_path, code_index_path, history, species, mode, pair_mode = sys.argv[1:]
+recipe_dir = os.path.abspath(recipe_path)
+recipe = {
+    "format": "tenet_localte_lazy_recipe_v1",
+    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    "work_dir": os.getcwd(),
+    "matrix_parquet": os.path.abspath("cell_gene_trsps.parquet"),
+    "gene_names": os.path.abspath("gene_names"),
+    "time_index_map": os.path.abspath("time_index_map.parquet") if os.path.exists("time_index_map.parquet") else None,
+    "all_pairs": os.path.abspath("all_pairs.csv") if os.path.exists("all_pairs.csv") else None,
+    "te_result_all": os.path.abspath("TE_result_all.parquet"),
+    "history_length": int(history),
+    "kernel_width": 0.5,
+    "species": species,
+    "network_mode": mode,
+    "pair_mode": pair_mode,
+    "note": "Exact LocalTE arrays were not materialized during TE. Use python -m code.localte_lazy_export to export selected edges on demand.",
+}
+with open(os.path.join(recipe_dir, "recipe.json"), "w", encoding="utf-8") as fh:
+    json.dump(recipe, fh, indent=2)
+PY
+        echo "[LocalTE] Lazy recipe written: ${LOCAL_TE_RECIPE_DIR}/recipe.json"
+        echo "[LocalTE] Full LocalTE export skipped. Export selected edges later with code.localte_lazy_export."
+        set_stage "LOCALTE_LAZY_READY"
+    else
+    DIRECT_LOCALTE_MARKER="${LOCAL_TE_SPLIT_OUTPUT_DIR}/direct_localte_done.json"
+    if [[ "${LOCAL_TE_VIDEO_TILES,,}" == "on" ]]; then
+        DIRECT_LOCALTE_MARKER="${LOCAL_TE_VIDEO_OUTPUT_DIR}/direct_localte_done.json"
+    fi
+    if [[ "${LOCAL_TE_DIRECT_CHUNKS,,}" == "on" && "${LOCAL_TE_SPLIT_EXPORT,,}" == "on" && -f "$DIRECT_LOCALTE_MARKER" ]]; then
+        echo "[LocalTE] Direct LocalTE streaming already completed; skipping secondary LocalTE export."
+        echo "[LocalTE] Marker: $DIRECT_LOCALTE_MARKER"
+        set_stage "LOCALTE_DIRECT_DONE"
+    else
     echo "[LocalTE] Exporting LocalTE chunks (${LOCAL_TE_CHUNK_SIZE} timepoints per chunk)."
     set_stage "LOCALTE_EXPORT"
     LOCAL_TE_EFFECTIVE_WORKERS="$LOCAL_TE_EXPORT_WORKERS"
@@ -1753,5 +1329,7 @@ PY
             echo "Error in localte_chunk_export.py. Exiting."
             exit 1
         fi
+    fi
+    fi
     fi
 fi

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-10-27",
+  "species": {
+    "human": {
+      "scientific_name": "Homo sapiens",
+      "aliases": [
+        "homo_sapiens"
+      ],
+      "reference": "human_GRCh38_GENCODE_v44_legacy",
+      "tf_file": "GO_symbol_human_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
+    },
+    "mouse": {
+      "scientific_name": "Mus musculus",
+      "aliases": [
+        "mus_musculus"
+      ],
+      "reference": "mouse_GRCm39_GENCODE_M39",
+      "tf_file": "GO_symbol_mouse_regulation_of_transcription+sequence-specific_DNA_binding_list.txt"
+    },
+    "zebrafish": {
+      "scientific_name": "Danio rerio",
+      "aliases": [
+        "danio_rerio"
+      ],
+      "reference": "zebrafish_GCF_052040795.2_RefSeq",
+      "tf_list_bundled": false,
+      "taxon": 7955
+    },
+    "fly": {
+      "scientific_name": "Drosophila melanogaster",
+      "aliases": [
+        "fruitfly",
+        "fruit fly",
+        "drosophila"
+      ],
+      "reference": "fly_GCF_000001215.4_RefSeq",
+      "tf_list_bundled": false,
+      "taxon": 7227
+    },
+    "worm": {
+      "scientific_name": "Caenorhabditis elegans",
+      "aliases": [
+        "c_elegans",
+        "c. elegans"
+      ],
+      "reference": "worm_GCF_000002985.6_RefSeq",
+      "tf_list_bundled": false,
+      "taxon": 6239
+    },
+    "rat": {
+      "scientific_name": "Rattus norvegicus",
+      "aliases": [],
+      "reference": "rat_GCF_036323735.1_RefSeq",
+      "tf_list_bundled": false,
+      "taxon": 10116
+    }
+  }
+}
